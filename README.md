@@ -5,6 +5,7 @@
 - **【A】Google Play Billing 通用解锁** —— 针对接入 Google Play Billing SDK 的 App；
 - **【B】自动 VIP 拦截（SharedPreferences 方案）** —— 针对把会员/PRO/去广告状态存本地 `SharedPreferences` 的 App（**不要求走 Google 付费**，国内 App 也覆盖）。
 - **【C】选定 App 精确激活增强（ProActivator，白名单）** —— 针对把 PRO 位存【内存对象】、不经 SP 的 App（如指尖3D `com.mobilecad.app` 的 `EntitlementState`，构造器 `(Z,Enum,J,Z)` 首参=pro），做 dex 级精确构造器钩强制激活。仅白名单包名生效，不对任意 App 盲扫，避免误伤。
+- **【D】联网鉴权抗 HOOK 自测（NetLabHook，授权自测用）** —— 模拟针对服务端/联网鉴权型 App 的攻击面：OkHttp 响应篡改(T1)、SSL pinning 探测(T2)、WebView JS 注入/调用记录(T3)。默认 LOG_ONLY=只观测不改写；填规则关 LOG_ONLY 重建后测自己 App 能否被打穿。请勿用于破解他人服务。
 
 与 `lsposed_pro_unlock`（只针对 `com.mobilecad.app` 的专版）不同，本模块**无包名白名单**。
 
@@ -109,12 +110,47 @@ Billing SDK 无关（正好补上【A】“国内非 Billing App” 的空档）
 ## 使用
 
 1. LSPosed 中启用本模块；
-2. 作用域勾选目标 App；若要用【B】，勾"系统框架"即可对全部 App 生效；
-3. 重启目标 App；
+2. 作用域（按通道勾选，见下表）；
+3. 重启系统/软重启（zygote 钩子才生效）；
 4. 排查日志：
    - `[UBilling]` → Billing 回灌是否触发、探测到哪些 SKU；
    - `[UVip]` → 命中了哪些 SP key、自动赋了什么值。
    - `[UPro]` → (仅 com.mobilecad.app) PRO 构造器是否被精确挂钩激活。
+   - `[UNet]` → (联网自测) 是否命中 OkHttp 响应面 / SSL pinning / WebView JS 调用。
+
+### 作用域速查（三通道 × 勾选）
+
+| 想要的效果 | 需要勾选 |
+|---|---|
+| 【B】SP/VIP 对**全部 App** 生效 | 「Android 系统」(系统框架) |
+| 【A】Billing 回灌对某个 App 生效 | 勾**那个 App** |
+| 【C】指尖3D 精确激活 | 勾 **com.mobilecad.app** |
+
+三通道全开 = 勾「系统框架」+ 你想要的 App 们。只勾具体 App 不勾系统框架时，
+UVip(SP) 不会挂载（它走 zygote）；只勾系统框架时 Billing/ProActivator 不会注入
+任何具体 App（它们走 handleLoadPackage 按进程触发）。改完作用域需重启。
+
+### 联网型 App 怎么自测抗 hook（【D】NetLabHook）
+
+服务端/联网鉴权型 App（如 DCloud/H5 + 云函数发卡）不属于【A】【B】【C】解锁范围，
+但若要验证“自己的 App 防不防得住 hook”，勾选它后看 `[UNet]` 日志：
+
+| 日志 | 含义 | 说明你的 App |
+|---|---|---|
+| `命中 OkHttp 响应面` | 攻击者可 hook 你的网络响应 | 关键放行必须在服务端判；响应可加签名/加密 |
+| `★CertificatePinner.check 被调用` | 你启用了证书固定 | 防抓包/防中间人改包，建议保留 |
+| `[T3] evaluateJavascript / javascript:` | 攻击者可在 WebView 注入 JS | 关键判定不要放前端；JS 桥收紧 |
+
+默认 LOG_ONLY=true 只观测。要“实战改写”测到底：编辑 `NetLabHook.REPLACEMENTS`
+(响应 JSON 字段替换) 与 `NEEDLE_JS`(注入脚本)，LOG_ONLY=false 后重建再测。
+若改完服务端仍不放行 = 防住了（服务端不可信客户端的设计生效）。
+
+### kill vip 的边界（哪类 App 无效）
+
+- 只对"**付费态存本地(SP/内部对象) + 本地判断即解锁**"的 App 有效。
+- **服务端账号 entitlement**（登录后服务器发卡、功能放行在服务端、本地只是展示缓存）
+  的 App 无效——例：DCloud/H5 壳 App，VIP 状态存在 `plus.storage['userdata']`(JSON) 且
+  由腾讯云函数下发、逻辑远程 JS 动态加载，客户端无 SP/Billing/内部激活消费点可 hook。
 
 ## 构建（GitHub Actions）
 
@@ -129,5 +165,6 @@ app/src/main/java/com/example/ubilling/
 ├── UniversalBillingHook.java  # 【A】通用 Billing hook（回灌已购 + 探测 SKU）
 ├── UniversalVipSweeper.java   # 【B】自动 VIP 拦截 + 观测学习闭环（SP + 词表 + 类型自适应 + 规则回灌）
 ├── ProActivator.java          # 【C】选定 App(com.mobilecad.app) dex 精确构造器激活
+├── NetLabHook.java            # 【D】联网抗hook自测: 响应篡改/pinning探测/WebView JS面
 └── MainActivity.java          # 占位 UI
 ```

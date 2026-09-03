@@ -32,8 +32,14 @@ import de.robv.android.xposed.IXposedHookZygoteInit.StartupParam;
  *   仅在 handleLoadPackage 命中白名单包名时启用 —— 这是 UVip(SP) 与
  *   UBilling(Billing) 覆盖不到的“内部状态”通道。
  *
+ * 【D】联网鉴权抗 HOOK 自测通道（NetLabHook，仅授权自测）
+ *   模拟“破解方针对服务端/联网鉴权型 App”的攻击面：OkHttp 响应篡改(T1)、
+ *   SSL pinning 探测(T2)、WebView JS 注入面(T3)。默认 LOG_ONLY 只观测不打日志外
+ *   任何改；填 NetLabHook.REPLACEMENTS / NEEDLE_JS 并关 LOG_ONLY 后重建，可对自己
+ *   的 App 验证“改响应/注入 JS 能否得逞”，据此加固服务端。请勿用于破解他人服务。
+ *
  * 用法：LSPosed 作用域勾选目标 App（VIP 拦截因是 zygote 级，勾“系统框架”
- * 即可对全部 App 生效），重启后看日志 [UBilling] / [UVip] / [UPro]。
+ * 即可对全部 App 生效），重启后看日志 [UBilling] / [UVip] / [UPro] / [UNet]。
  */
 public class Main implements IXposedHookLoadPackage, IXposedHookZygoteInit {
 
@@ -59,6 +65,15 @@ public class Main implements IXposedHookLoadPackage, IXposedHookZygoteInit {
             } catch (Throwable t) {
                 XposedBridge.log("[UPro] 挂载失败: " + t);
             }
+        }
+
+        // 【D】联网鉴权抗 hook 自测通道（NetLabHook）——对每个勾选进程尝试；
+        //     内部按“是否加载 okhttp3/WebView”自动决定挂哪些面，无对应类即静默跳过。
+        //     默认只观测(LOG_ONLY=true)；自测实战需改 NetLabHook 常量并重建。
+        try {
+            NetLabHook.hook(cl, lpparam.packageName);
+        } catch (Throwable t) {
+            XposedBridge.log("[UNet] 挂载失败: " + t);
         }
 
         // 探测目标进程是否真的用了 Google Play Billing SDK
