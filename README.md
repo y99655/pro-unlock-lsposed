@@ -6,7 +6,7 @@
 - **【B】自动 VIP 拦截（SharedPreferences 方案）** —— 针对把会员/PRO/去广告状态存本地 `SharedPreferences` 的 App（**不要求走 Google 付费**，国内 App 也覆盖）。
 - **【D】联网鉴权抗 HOOK 自测（NetLabHook，授权自测用）** —— 模拟针对服务端/联网鉴权型 App 的攻击面：OkHttp 响应篡改(T1)、SSL pinning 探测(T2)、WebView JS 注入/调用记录(T3)。默认 LOG_ONLY=只观测不改写；填规则关 LOG_ONLY 重建后测自己 App 能否被打穿。请勿用于破解他人服务。
 - **【E】配置化精确返回值 Hook（MethodRuleHook，授权自测用）** —— 人工配置 `类.方法 -> 返回值`，强制改写目标 App 里某个具名业务方法（如 `CommonUtil.getLingPaiZuanShi()` 这类会员判定）的返回，返回值按方法真实返回类型自动转换。规则为空即跳过。仅自有/授权 App 自测。
-- **【F】自动盲扫解锁（AutoVipProHook，授权自测用）** —— 遍历目标 App 里"类名含 vip/pro/premium/member" 的类与"方法名像会员判定"的方法，**按成员原有值类别**决定注入值（布尔解锁位→true、等级 int→高值、到期 long/日期→2099、档位 string→premium）。v16 起支持**按类名盲扫其字段**（含静态会员字段直接改写存储值）；v17 起支持**单例对象实例字段注入**（hook `getInstance()/get()/instance()` 等静态取实例方法，拿到会员单例后改写其会员实例字段）与**多 ClassLoader 深度枚举**（应用 loader + 非系统父链并集，覆盖分包/插件/壳延迟加载）；**v1.8 起并入原 C(ProActivator) 的「结构盲扫」**——不看类名/方法名，纯按"会员状态对象"构造器结构 `(boolean, Enum, long, boolean)`（激活位+档位枚举+到期戳）对每个已加载类自动探测并挂钩（内存对象型会员态、类名/方法名全混淆如指尖3D 也能命中），去白名单对所有勾选 App 生效；**v1.9 起默认 LOG_ONLY=false 全量注入**——凡命中结构盲扫/boolean 解锁位/档位 getter/会员类字段一律真改写，恢复通道 C 对指尖3D 的"开箱即解锁"（副作用：对作用域内所有勾选 App 生效，只勾选自己/获授权 App）。
+- **【F】自动盲扫解锁（AutoVipProHook，授权自测用）** —— 遍历目标 App 里"类名含 vip/pro/premium/member" 的类与"方法名像会员判定"的方法，**按成员原有值类别**决定注入值（布尔解锁位→true、等级 int→高值、到期 long/日期→2099、档位 string→premium）。v16 起支持**按类名盲扫其字段**（含静态会员字段直接改写存储值）；v17 起支持**单例对象实例字段注入**（hook `getInstance()/get()/instance()` 等静态取实例方法，拿到会员单例后改写其会员实例字段）与**多 ClassLoader 深度枚举**（应用 loader + 非系统父链并集，覆盖分包/插件/壳延迟加载）；**v1.8 起并入原 C(ProActivator) 的「结构盲扫」**——不看类名/方法名，纯按"会员状态对象"构造器结构 `(boolean, Enum, long, boolean)`（激活位+档位枚举+到期戳）对每个已加载类自动探测并挂钩（内存对象型会员态、类名/方法名全混淆如指尖3D 也能命中），去白名单对所有勾选 App 生效；**v1.10 起为两级注入闸门**——第一级【恒注入，不读开关、近零误伤】＝结构盲扫 `(Z,Enum,J,Z)` + STRONG_BOOL 精确整词解锁位(isPro/isVip/isPremium…)，对指尖3D 这类内存对象会员态开箱即解锁；第二级【宽泛】由 `INJECT_WIDE` 控制（默认 false＝仅观测打 [UAuto] 不改值）＝inVipContext 放宽布尔/档位到期 getter/静态字段/单例实例字段，需连宽泛也注入时置 `AutoVipProHook.INJECT_WIDE=true` 重建（只勾选自己/获授权 App）。
 - **【G】SQLite/DB 会员盲扫（DBSweeperHook，授权自测用）** —— 覆盖"会员态存本地 SQLite/Room 表、判定时 SELECT 出来比"的 App。hook `SQLiteDatabase.rawQuery/query` 出口 + `AbstractCursor` 的 `getString/getInt/getLong`，按**列名语义**把"布尔会员位列→true/1、等级列→顶级档"的读取改写成开通态；到期列因秒/毫秒二义只观测不强注入。默认 LOG_ONLY=只打 [UDB] 观测。
 
 与 `lsposed_pro_unlock`（只针对 `com.mobilecad.app` 的专版）不同，本模块代码层面**无包名白名单**——
@@ -173,7 +173,7 @@ app/src/main/java/com/example/ubilling/
 ├── UniversalVipSweeper.java   # 【B】自动 VIP 拦截 + 观测学习闭环（SP + 词表 + 类型自适应 + 规则回灌）——只作用域勾选 App
 ├── NetLabHook.java            # 【D】联网抗hook自测: 响应篡改/pinning探测/WebView JS面
 ├── MethodRuleHook.java        # 【E】配置化精确返回值 Hook：类.方法 -> 返回值(按返回类型自动转换)
-├── AutoVipProHook.java        # 【F】自动盲扫: 方法名/类名强词 + 字段按原值类别 + 单例实例字段注入 + v1.8结构盲扫(内存对象构造器签名) + v1.9默认LOG_ONLY=false全量注入
+├── AutoVipProHook.java        # 【F】自动盲扫: 方法名/类名强词 + 字段按原值类别 + 单例实例字段注入 + 结构盲扫(内存对象构造器签名) v1.10两级闸门:结构+STRONG_BOOL恒注入/宽泛受INJECT_WIDE
 ├── DBSweeperHook.java         # 【G】SQLite/DB 会员盲扫: hook query出口+Cursor读取, 按列名语义改写
 └── MainActivity.java          # 占位 UI
 ```

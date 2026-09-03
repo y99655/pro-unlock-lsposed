@@ -52,10 +52,13 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
  *   v1.8 并入原 C(ProActivator) 的“结构盲扫”：不看类名/方法名，纯按会员状态对象
  *   构造器结构 (boolean,Enum,long,boolean) 对每个已加载类自动探测挂钩，内存对象型
  *   （类名/方法名全混淆如指尖3D）亦命中。
- *   v1.9 起默认 LOG_ONLY=false（全量注入）：凡命中结构盲扫 (Z,Enum,J,Z)/boolean 解锁位/
- *   档位 getter/会员类字段，一律真改写 —— 恢复通道 C 对指尖3D 的“开箱即解锁”。
- *   副作用：对作用域内所有勾选 App 生效，请在 LSPosed 只勾选自己/获授权 App。
- *   仅用于你自己/获授权 App 的防御自测。
+ *   v1.10 起为【两级注入闸门】(替代 v1.9 单一 LOG_ONLY 全开)：
+ *     · 第一级恒注入(不读开关, 近零误伤)：结构盲扫 (Z,Enum,J,Z) + STRONG_BOOL 精确
+ *       整词解锁位(isPro/isVip/isPremium…) —— 指尖3D 这类内存对象会员态开箱即解锁。
+ *     · 第二级宽泛受 INJECT_WIDE 控制(默认 false=仅观测打 [UAuto] 不改值)：inVipContext
+ *       放宽布尔 / 档位到期 getter / 静态字段 / 单例实例字段。需连宽泛也注入时置
+ *       AutoVipProHook.INJECT_WIDE=true 重建。
+ *   请在 LSPosed 只勾选自己/获授权 App。仅用于你自己/获授权 App 的防御自测。
  *
  * 【G】SQLite / DB 会员盲扫通道（DBSweeperHook，仅授权自测）
  *   覆盖“会员态存在本地 SQLite/Room 表、判定时 SELECT 出来比”的 App。hook
@@ -122,8 +125,9 @@ public class Main implements IXposedHookLoadPackage {
         }
 
         // 【F】全 VIP/PRO 自动盲扫通道（AutoVipProHook）——按方法名强词表自动发现并
-        //     改写会员判定 getter，并入结构盲扫(内存对象构造器签名)。v1.9 起默认
-        //     LOG_ONLY=false 全量注入(开箱即解锁，恢复 C 行为)。仅自有/授权 App 自测。
+        //     改写会员判定 getter，并入结构盲扫(内存对象构造器签名)。v1.10 两级闸门：
+        //     结构(Z,Enum,J,Z)+STRONG_BOOL 恒注入；宽泛(inVipContext/档位getter/字段扫)
+        //     受 INJECT_WIDE(默认 false=仅观测)。仅自有/授权 App 自测。
         try {
             AutoVipProHook.hook(cl, lpparam.packageName);
         } catch (Throwable t) {

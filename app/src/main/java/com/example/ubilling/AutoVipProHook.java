@@ -43,13 +43,15 @@ import de.robv.android.xposed.XposedHelpers;
  *       且不命中 FALSE_POSITIVES(误伤子串) 才候选。不会盲抓 isEmpty/isVisible。
  *   门禁2【形态】：只 hook 无参、非 static(除少数)、返回 boolean/int/long/String 的
  *       getter/isXxx/hasXxx；带参、返回 void/Object/集合的一律跳过。
- *   门禁3【分级注入 + 全量注入(v1.9)】：
- *       - 把“绝对安全的 boolean 解锁位”(isPro/isVip/isPremium 精确名) 归 STRONG_BOOL，
- *         命中即注入 true（这类名字几乎不可能误伤）；
- *       - 其余(名字含 vip/pro 前缀组合、返回 int 的等级/档位 getter 等) 亦随全量注入
- *         改写为开通态（见下方 LOG_ONLY 总开关；v1.9 已置 false 为解锁模式）。
- *       本通道早期设计为“默认 LOG_ONLY=true 先观测一轮确认无误伤”，v1.9 起为满足
- *       开箱即解锁（通道 C 行为）已默认置 false 直接注入；仍可用 LOG_ONLY=true 切回观测。
+ *   门禁3【两级注入闸门(v1.10)】：把注入目标按“误伤风险”分两级，各自独立开关——
+ *       - 第一级【恒注入】＝近零误伤，不读任何开关，命中即真注入：
+ *           ① 结构盲扫 (Z,Enum,J,Z) 精确构造器（通道 C 核心，见 v1.8 段）；
+ *           ② STRONG_BOOL 精确整词解锁位（core 整词命中 EXACT_BOOL 或以 BOOL_SUFFIX
+ *              结尾，如 isPro/isVip/isPremium/isGold——这类名字几乎不可能误伤）。
+ *       - 第二级【宽泛】＝由 INJECT_WIDE 控制（默认 false＝只观测打 [UAuto]，不改值）：
+ *           inVipContext 放宽布尔(inVipContext)、档位/到期 getter(int/long/string)、
+ *           会员类静态字段改写、单例实例字段改写。首次对一个新 App 若担心误伤，
+ *           保持 INJECT_WIDE=false 跑一轮看命中清单，再置 true 重建做真实注入。
  *
  * 边界：同其它通道，仅用于你自己开发/拥有或明确获授权做安全评估的 App。
  * ============================================================================
@@ -83,9 +85,9 @@ import de.robv.android.xposed.XposedHelpers;
  *         long/Long    名含 expire/end/valid/date/ts 或任意(会员上下文) -> 2099-01-01
  *         String       名含 expire/valid/date -> "2099-01-01"；含 level/tier/type
  *                       -> 原值已是 premium/vip/pro 则保留，否则 "premium"
- *     - 默认 LOG_ONLY=true：只打 [UAuto] 观测(类·成员·类别·原值·拟注入)，不改值。
- *       (v16 引入时的保守默认；v1.9 起全局 LOG_ONLY 已置 false，此字段扫同样真改写，
- *       详见类顶部 LOG_ONLY 总开关。)
+ *     - 本字段扫属第二级【宽泛】，受 INJECT_WIDE 控制：默认 false 只打 [UAuto] 观测
+ *       (类·成员·类别·原值·拟注入)，不改值；置 true 才真改写存储态。
+ *       (v16 引入时曾保守默认观测；详见类顶部两级注入闸门 INJECT_WIDE。)
  * ============================================================================
  *
  * ============================================================================
@@ -102,10 +104,10 @@ import de.robv.android.xposed.XposedHelpers;
  *       (boolean, Enum, long, boolean) —— 这是会员“Entitlement 状态对象”的通用
  *       布局（激活位 boolean + 档位枚举 + 到期 long + 冗余 boolean），指尖3D 即此。
  *     - 命中【精确签名】= 强命中（此类构造器几乎只有会员状态对象才有，普通业务
- *       类极难撞上，误伤风险极低）：
- *         LOG_ONLY=true  -> 打 [UAuto] 观测（类、构造器签名、boolean getter），不改值；
- *         LOG_ONLY=false -> hook 构造器首参 boolean 置 true（写激活位）+ 该类所有
- *                           无参 public boolean getter（混淆 a()）强制返回 true 双保险。
+ *       类极难撞上，误伤风险极低）。v1.8 引入时曾受 LOG_ONLY 压制(观测/注入两态)；
+ *       v1.10 起结构盲扫列【第一级·恒注入】——不读任何开关、命中即真注入：
+ *       hook 构造器首参 boolean 置 true（写激活位）+ 该类所有无参 public boolean
+ *       getter（混淆 a()）强制返回 true 双保险。
  *     - 只认精确 (Z,Enum,J,Z) 签名，宁漏勿伤：普通 UI/业务/几何类构造器几乎不可能
  *       恰好是「boolean+Enum+long+boolean」布局，故该签名命中误伤风险极低、也不刷屏。
  * ============================================================================
@@ -120,24 +122,43 @@ import de.robv.android.xposed.XposedHelpers;
  *   boolean getter true + 解锁位/档位/会员字段改写），与通道 C 当初对指尖3D 的行为一致。
  *   副作用与作用域提醒见类顶部 LOG_ONLY 总开关注释。
  * ============================================================================
+ *
+ * ============================================================================
+ * v1.10：把 v1.9 的单一 LOG_ONLY 拆成【两级注入闸门】，避免“一刀切全开”误伤别家
+ *
+ *   用户指出 v1.9 全量注入(LOG_ONLY=false)会让 judge 方法名扫 / scanFields 字段扫
+ *   对【所有勾选 App】也真注入，把 C 当初“白名单只打指尖3D”的精确语义破坏了。
+ *   故按风险拆两级、各自独立开关：
+ *     - 第一级【恒注入】(不读开关, 命中即真改写, 近零误伤)：
+ *          ① 结构盲扫 (Z,Enum,J,Z) 精确构造器 —— C 当初对指尖3D 的核心；
+ *          ② STRONG_BOOL 精确整词解锁位(isPro/isVip/isPremium…)。
+ *     - 第二级【宽泛】由 INJECT_WIDE 控制(默认 false=只观测打 [UAuto] 不改值)：
+ *          inVipContext 放宽布尔、档位/到期 getter、静态字段、单例实例字段。
+ *   效果：指尖3D 这类内存对象会员态【开箱即解锁】(靠结构盲扫恒注入)；而勾选里其它
+ *   “名字像会员”但未必是会员逻辑的 getter/字段默认【只观测不误伤】。用户如需连这些
+ *   宽泛也注入，把 AutoVipProHook.INJECT_WIDE 置 true 重建即可。
+ * ============================================================================
  */
 public class AutoVipProHook {
 
     private static final String TAG = "[UAuto]";
 
-    /** ====== 注入总开关 ======
-     *  LOG_ONLY=true  -> 只扫类/方法并打 [UAuto] 观测日志，不改任何返回值（安全评估用）。
-     *  LOG_ONLY=false -> 真正强制改写命中方法的返回值 / 构造参数 / 字段（解锁模式）。
+    /** ====== 两级注入闸门(v1.10，替代 v1.9 的单一 LOG_ONLY) ======
+     *  第一级【恒注入】(不读任何开关，命中即真改写)——近零误伤，覆盖通道 C 当初
+     *  对“内存对象会员态”的开箱即解锁能力：
+     *     ① 结构盲扫 (Z,Enum,J,Z) 精确构造器（v1.8 并入 C 的能力：构造首参 true +
+     *        该类所有无参 public boolean getter→true）；
+     *     ② STRONG_BOOL 精确整词解锁位（isPro/isVip/isPremium/isGold…，core 整词
+     *        命中 EXACT_BOOL 或以 BOOL_SUFFIX 结尾）。
      *
-     *  v1.9 默认置 false（全量注入，用户选定方向）：对【作用域内勾选】的每个 App，
-     *  凡命中结构盲扫 (Z,Enum,J,Z) 构造器 / boolean 解锁位 / 档位 getter / 会员类
-     *  字段的，一律真注入——恢复通道 C 当初对指尖3D 的“开箱即解锁”行为。
+     *  第二级【宽泛】由下方 INJECT_WIDE 控制（默认 false＝只观测打 [UAuto]，不改值）：
+     *     inVipContext 放宽布尔、档位/到期 getter(int/long/string)、会员类静态字段、
+     *     单例实例字段。这类按“名字像会员”猜，对勾选进程确有误伤可能，故默认保守。
      *
-     *  注意副作用：此开关同时放开 judge() 的方法名扫与 scanFields 的字段改写，
-     *  即除“几乎零误伤的结构盲扫”外，勾选进程里名称像会员的 getter/字段也会被改。
      *  请在 LSPosed 作用域内【只勾选你自己开发/拥有/获授权评估的 App】。
      */
-    private static final boolean LOG_ONLY = false;
+    /** true -> judge/字段扫 的宽泛命中也真改写；false(默认) -> 只打 [UAuto] 观测日志不改值。 */
+    private static final boolean INJECT_WIDE = false;
 
     /** 仅对选定的包名执行(调用方也会 gate，这里留双保险)；空/null 表示任意勾选进程。 */
     public static final String TARGET_PKG = null;
@@ -243,7 +264,8 @@ public class AutoVipProHook {
         if (!donePkg.add(pkg)) return;
 
         XposedBridge.log(TAG + " 全VIP/PRO盲扫通道挂载 @ " + pkg
-                + (LOG_ONLY ? " (LOG_ONLY=观测, 不改返回值)" : " (注入开启)"));
+                + " [恒注入: 结构(Z,Enum,J,Z)+STRONG_BOOL] "
+                + (INJECT_WIDE ? " [宽泛INJECT_WIDE=注入]" : " [宽泛INJECT_WIDE=仅观测]"));
         try {
             enumerateDex(cl);
         } catch (Throwable t) {
@@ -468,7 +490,10 @@ public class AutoVipProHook {
         }
     }
 
-    /** 精确命中：观测或 hook（构造器首参 true + 该类所有无参 public boolean getter→true）。 */
+    /** 精确命中：结构盲扫（通道 C 核心）——不读任何开关，恒注入：
+     *  hook 构造器首参 boolean 置 true（写激活位）+ 该类所有无参 public boolean
+     *  getter（混淆 a()）强制 true 双保险。(Z,Enum,J,Z) 为会员状态对象专属布局，
+     *  近零误伤，故与 STRONG_BOOL 同列第一级【恒注入】，开箱即解锁。 */
     private static void entitleStrongHit(Class<?> c, Constructor<?> strong) {
         // 描述构造器签名
         StringBuilder sig = new StringBuilder("(");
@@ -478,14 +503,8 @@ public class AutoVipProHook {
                        : (pt == boolean.class ? "Z" : pt == long.class ? "J" : pt.getSimpleName()));
         }
         sig.append(")");
-        if (LOG_ONLY) {
-            entitleHookedCnt++;
-            XposedBridge.log(TAG + " [结构观测] PRO状态对象结构命中: " + c.getName()
-                    + " 构造器" + sig + " (类名/方法名可全混淆, 纯结构识别)"
-                    + " -> 可注入 构造首参true + boolean getter→true; LOG_ONLY 仅观测不改值  累计="
-                    + entitleHookedCnt);
-            return;
-        }
+        XposedBridge.log(TAG + " [结构命中] PRO状态对象: " + c.getName() + " 构造器" + sig
+                + " (类名/方法名可全混淆, 纯结构识别) -> 恒注入 构造首参true+boolean getter→true");
         // 注入：hook 构造器，把激活位 boolean 参数置 true
         try {
             XposedBridge.hookMethod(strong, new XC_MethodHook() {
@@ -544,7 +563,7 @@ public class AutoVipProHook {
 
         Class<?> ret = m.getReturnType();
 
-        // ---- boolean 解锁位 ----
+        // ---- boolean 解锁位（两级闸门）----
         if (ret == boolean.class) {
             // 剥离 is/has/get 前缀，得到 core（如 isVip->vip, hasPro->pro, getMember->member）
             String core = stripPrefix(low);
@@ -562,16 +581,24 @@ public class AutoVipProHook {
             if (!strong && !inVipContext) return;
 
             candBool++;
-            if (LOG_ONLY) {
-                XposedBridge.log(TAG + " [观测] boolean解锁位: " + c.getName() + "." + name
-                        + "() -> 本可注入true (core=" + core + (vipCls ? ", 类名会员语境)" : ")"));
+            if (strong) {
+                // 第一级【恒注入】: STRONG_BOOL 精确整词解锁位(isPro/isVip/isPremium…)，
+                // 近零误伤，不读 INJECT_WIDE，命中即注入 true。
+                hookTo(c, m, "true", "boolean解锁位·STRONG恒注入");
                 return;
             }
-            hookTo(c, m, "true", "boolean解锁位");
+            // 第二级【宽泛】: inVipContext 放宽(类名会员语境 + core 含会员开通词)。
+            if (!INJECT_WIDE) {
+                XposedBridge.log(TAG + " [观测/宽泛] boolean解锁位(vipCls语境): " + c.getName()
+                        + "." + name + "() -> 本可注入true (core=" + core
+                        + "; INJECT_WIDE=false 仅观测)");
+                return;
+            }
+            hookTo(c, m, "true", "boolean解锁位·宽泛");
             return;
         }
 
-        // ---- int/long/String 档位/等级 getter ----
+        // ---- int/long/String 档位/等级 getter（第二级【宽泛】, 受 INJECT_WIDE）----
         if (ret == int.class || ret == Integer.class || ret == long.class
                 || ret == Long.class || ret == String.class) {
             String core = stripPrefix(low);
@@ -586,12 +613,13 @@ public class AutoVipProHook {
             if ((!vipCls && !hasVipWord) || (!tierish && !dateish)) return;
             // 在会员语境里，日期/到期 getter 与档位 getter 都算候选
             candTier++;
-            if (LOG_ONLY) {
-                XposedBridge.log(TAG + " [观测] " + (dateish ? "到期getter" : "档位getter")
+            if (!INJECT_WIDE) {
+                XposedBridge.log(TAG + " [观测/宽泛] " + (dateish ? "到期getter" : "档位getter")
                         + ": " + c.getName() + "." + name
                         + "() : " + ret.getSimpleName()
                         + (dateish ? " -> 本可注入2099" : " -> 本可注入顶级档位")
-                        + " (core=" + core + (vipCls ? ", 类名会员语境)" : ")"));
+                        + " (core=" + core + (vipCls ? ", 类名会员语境" : "")
+                        + "; INJECT_WIDE=false 仅观测)");
                 return;
             }
             String want = catValue(ret, dateish, core);
@@ -702,10 +730,10 @@ public class AutoVipProHook {
                     Object orig;
                     try { orig = f.get(null); } catch (Throwable e) { orig = null; }
                     String want = fieldCatValue(t, dateish, tierish, orig);
-                    if (LOG_ONLY) {
-                        XposedBridge.log(TAG + " [观测] 静态字段 " + sig
+                    if (!INJECT_WIDE) {
+                        XposedBridge.log(TAG + " [观测/宽泛] 静态字段 " + sig
                                 + " : " + t.getSimpleName() + " cur=" + String.valueOf(orig)
-                                + " -> 本可改写为 " + want);
+                                + " -> 本可改写为 " + want + " (INJECT_WIDE=false 仅观测)");
                         continue;
                     }
                     if (!fieldTouched.add(sig)) continue;
@@ -810,10 +838,11 @@ public class AutoVipProHook {
                 Object orig;
                 try { orig = f.get(inst); } catch (Throwable e) { orig = null; }
                 String want = fieldCatValue(t, dateish, tierish, orig);
-                if (LOG_ONLY) {
-                    XposedBridge.log(TAG + " [观测] 单例实例字段 " + sig
+                if (!INJECT_WIDE) {
+                    XposedBridge.log(TAG + " [观测/宽泛] 单例实例字段 " + sig
                             + " : " + t.getSimpleName() + " cur=" + String.valueOf(orig)
-                            + " -> 本可改写为 " + want + " (单例 " + System.identityHashCode(inst) + ")");
+                            + " -> 本可改写为 " + want + " (单例 " + System.identityHashCode(inst)
+                            + "; INJECT_WIDE=false 仅观测)");
                     continue;
                 }
                 if (!instFieldTouched.add(sig)) continue;
