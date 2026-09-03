@@ -226,6 +226,9 @@ public class UniversalVipSweeper {
     /** 判定 key 是否命中任一词义（付费/档位/解锁/去广告/到期）。 */
     static boolean hit(String rawKey) {
         if (rawKey == null) return false;
+        // 业务时间戳护栏：last_app_modify_date 等即使被词表/旧规则命中也整体放行，
+        // 绝不对其注入日期或 premium(真机反馈: DCloud 防二次打包字段曾被误注 2099)。
+        if (hasAny(rawKey.toLowerCase(), BIZ_TIMESTAMP)) return false;
         // 先查学习规则：若该 key 已被确认是会员/日期形态，直接命中（无需词表覆盖）
         if (learnedHit(rawKey)) return true;
         String k = rawKey.toLowerCase();
@@ -241,10 +244,16 @@ public class UniversalVipSweeper {
         return false;
     }
 
-    /** 判定 key 是否带“到期/有效期”语义（决定是否走 2099 日期分支）。 */
+    /**
+     * 判定 key 是否带“到期/有效期”语义（决定是否走 2099 日期分支）。
+     * 先过“业务时间戳”护栏：DCloud 的 last_app_modify_date(防二次打包修改时间)、
+     * build/update/version 等业务时间字段即使被旧规则误标 date 也不注入日期，
+     * 只当普通键放行（真机反馈项）。
+     */
     static boolean isDateKey(String rawKey) {
         if (rawKey == null) return false;
         String k = rawKey.toLowerCase();
+        if (hasAny(k, BIZ_TIMESTAMP)) return false;
         if (hasAny(k, DATE_KEYWORDS)) return true;
         // 学习规则里该 key 若被判定为 date 形态，也视为日期键
         String pkg = currentPkg();
@@ -254,6 +263,14 @@ public class UniversalVipSweeper {
         }
         return false;
     }
+
+    /** 业务时间戳特征：命中则永不按“到期日期”注入(防误伤 last_app_modify_date 等)。 */
+    private static final String[] BIZ_TIMESTAMP = {
+        "last_app_modify", "modify_date", "last_modify", "update_date", "updated_at",
+        "build_date", "build_time", "version_date", "install_time", "install_date",
+        "first_launch", "create_time", "created_at", "created_date", "register_time",
+        "launch_time", "app_modify"
+    };
 
     private static boolean hasAny(String k, String[] arr) {
         for (String w : arr) if (k.contains(w)) return true;
@@ -570,9 +587,11 @@ public class UniversalVipSweeper {
                 String kk = k.toLowerCase();
                 // 命中信号（目的：发现词表没覆盖的 VIP key，同时避免误抓普通字段）：
                 //  (a) key 名本身像会员/日期 —— 命中；
-                //  (b) 值像 epoch(10-13位纯数字时间戳) —— 极强“到期时间戳”信号，不看名字也抓
-                //      （混淆 key 常存 epoch；注入大未来时间戳让“未过期”判断成立，低风险）；
-                //  (c) key 名含会员/日期提示词 且 值像人类可读日期字符串 —— 才抓（防 build_date 误伤）。
+                //  (b) key 名含会员/日期提示词 且 值像 epoch / 人类可读日期 —— 才抓。
+                //  ☆ 修复(真机反馈): 纯 epoch 值【不再】独立命中 —— 否则 DCloud 的
+                //    last_app_modify_date(防二次打包的 App 修改时间戳) 这类业务时间戳
+                //    会被误当"到期"注入 2099, 造成误伤。真正的会员到期 key 通常名字里
+                //    也带 expire/time/date 词, 或运行时经 getLong 语境命中(见 note)。
                 boolean strongName = hit(kk);
                 boolean epochVal   = looksLikeEpoch(v);
                 boolean nameHint   = hasAny(kk, DATE_KEYWORDS)
@@ -580,7 +599,7 @@ public class UniversalVipSweeper {
                         || hasAny(kk, TIER_KEYWORDS)
                         || hasAny(kk, UNLOCK_KEYWORDS)
                         || hasAny(kk, ADS_KEYWORDS);
-                boolean member = strongName || epochVal || (nameHint && looksLikeDateVal(v));
+                boolean member = strongName || (nameHint && (epochVal || looksLikeDateVal(v)));
                 if (member) {
                     // 确认形态，写入规则：若名字像日期或值像时间戳/日期 -> date；布尔型 xml true/false -> bool
                     String shape = shapeFrom(k, v);
