@@ -21,9 +21,9 @@ public class Main implements IXposedHookLoadPackage, IXposedHookZygoteInit {
             return;
         }
         XposedBridge.log("[ProUnlock] 命中目标包: " + lpparam.packageName);
-        // 主解锁：强制应用内部 PRO 对象的激活布尔位（与版本/混淆无关，真正通杀）
+        // 主解锁：dex 直接枚举 + 强制应用内部 PRO 对象的激活布尔位（与版本/混淆无关，真正通杀）
         try {
-            ProUnlock.hook();
+            ProUnlock.hook(lpparam.classLoader);
         } catch (Throwable t) {
             XposedBridge.log("[ProUnlock] ProUnlock 挂钩失败: " + t);
         }
