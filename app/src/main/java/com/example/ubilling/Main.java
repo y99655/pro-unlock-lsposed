@@ -49,6 +49,9 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
  *   不靠人工配置，按【方法名强词表】自动遍历目标 App 已加载类的无参 getter/isXxx/
  *   hasXxx，找出“会员判定方法”(isVip/isPro/isPremium/getVipLevel 等)并强制改写，
  *   覆盖“会员态由某个具名 getter 返回、不走 SP/Billing/人工配置”的自有 App。
+ *   v1.8 并入原 C(ProActivator) 的“结构盲扫”：不看类名/方法名，纯按会员状态对象
+ *   构造器结构 (boolean,Enum,long,boolean) 对每个已加载类自动探测挂钩，内存对象型
+ *   （类名/方法名全混淆如指尖3D）亦命中。
  *   默认 LOG_ONLY=true 只观测打 [UAuto] 日志，绝不改值 —— 先跑一轮看命中清单、
  *   确认无误伤后，再把 AutoVipProHook.LOG_ONLY 置 false 重载模块做真实注入。
  *   仅用于你自己/获授权 App 的防御自测。
@@ -88,8 +91,9 @@ public class Main implements IXposedHookLoadPackage {
             XposedBridge.log("[UVip] 挂载失败: " + t);
         }
 
-        // 【C】通道已移除(v1.7)：ProActivator(指尖3D 专用精确激活) 定向白名单已不再需要，
-        //     后续只针对勾选 App 走通用通道。
+        // 【C】通道已移除(v1.7)：ProActivator(指尖3D 专用定向白名单) 不再单列；
+        //     v1.8 已把其【结构盲扫】(内存对象构造器签名, 不看类名) 并入 F(AutoVipProHook),
+        //     对所有勾选 App 自动生效，无需白名单、无需人工配置。
 
         // 【D】联网鉴权抗 hook 自测通道（NetLabHook）——对每个勾选进程尝试；
         //     内部按“是否加载 okhttp3/WebView”自动决定挂哪些面，无对应类即静默跳过。

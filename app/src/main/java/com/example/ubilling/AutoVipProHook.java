@@ -1,5 +1,6 @@
 package com.example.ubilling;
 
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -24,7 +25,8 @@ import de.robv.android.xposed.XposedHelpers;
  * ============================================================================
  * 与既有通道的分工（为何需要它）：
  *   【B】UVip       扫 SharedPreferences 的 getXxx + key 关键词 —— 只覆盖 SP 型。
- *   （C. ProActivator 定向精确激活已于 v1.7 移除）
+ *   （C. ProActivator 定向精确激活已于 v1.7 移除，其【结构盲扫】能力在 v1.8 并入本
+ *     通道的 tryEntitleShape —— 去白名单、对所有勾选 App 自动扫“会员状态对象”）
  *   【D】NetLabHook 网络/WebView 观测 —— 服务端/联网型。
  *   【E】MethodRuleHook 人工配置 类.方法->返回值 —— 需逐条逆向后手填，做不到开箱即用。
  *   但真实世界大量“会员判定”就是【一个普通 getter】：MyApp.isVip()、UserInfo.isPro()、
@@ -82,6 +84,28 @@ import de.robv.android.xposed.XposedHelpers;
  *         String       名含 expire/valid/date -> "2099-01-01"；含 level/tier/type
  *                       -> 原值已是 premium/vip/pro 则保留，否则 "premium"
  *     - 默认 LOG_ONLY=true：只打 [UAuto] 观测(类·成员·类别·原值·拟注入)，不改值。
+ * ============================================================================
+ *
+ * ============================================================================
+ * v1.8 扩展【结构盲扫 tryEntitleShape】（并入 v1.7 移除的 C/ProActivator 能力，
+ * 去白名单、对所有勾选 App 自动生效）：
+ *
+ *   上面的方法名/类名词表扫【依赖名字】，抓不到“会员态放在一个类名方法名都被 R8
+ *   混淆的【内存对象】里、靠构造器写入激活位”的目标（如指尖3D：类 q5/o0、
+ *   getter a()，名字全不带 vip/pro）。C 当时靠的是【结构签名】而非名字，能命中。
+ *   v1.8 把这条能力并入本通道并泛化：
+ *
+ *     - 不看类名/方法名，只对每个已加载类做【结构探测】：
+ *       类含 ≥1 个 boolean 字段（激活位存储特征），且存在精确构造器签名
+ *       (boolean, Enum, long, boolean) —— 这是会员“Entitlement 状态对象”的通用
+ *       布局（激活位 boolean + 档位枚举 + 到期 long + 冗余 boolean），指尖3D 即此。
+ *     - 命中【精确签名】= 强命中（此类构造器几乎只有会员状态对象才有，普通业务
+ *       类极难撞上，误伤风险极低）：
+ *         LOG_ONLY=true  -> 打 [UAuto] 观测（类、构造器签名、boolean getter），不改值；
+ *         LOG_ONLY=false -> hook 构造器首参 boolean 置 true（写激活位）+ 该类所有
+ *                           无参 public boolean getter（混淆 a()）强制返回 true 双保险。
+ *     - 只认精确 (Z,Enum,J,Z) 签名，宁漏勿伤：普通 UI/业务/几何类构造器几乎不可能
+ *       恰好是「boolean+Enum+long+boolean」布局，故该签名命中误伤风险极低、也不刷屏。
  * ============================================================================
  */
 public class AutoVipProHook {
@@ -330,8 +354,8 @@ public class AutoVipProHook {
             h.postDelayed(new Runnable() {
                 @Override public void run() {
                     XposedBridge.log(String.format(
-                            "%s [%s 第%d轮] 扫 %d 类 | boolean解锁位候选 %d | 档位候选 %d | 实际挂钩 %d",
-                            TAG, pkg, round, scannedCls, candBool, candTier, hookedCnt));
+                            "%s [%s 第%d轮] 扫 %d 类 | boolean解锁位候选 %d | 档位候选 %d | 结构命中 %d | 实际挂钩 %d",
+                            TAG, pkg, round, scannedCls, candBool, candTier, entitleHookedCnt, hookedCnt));
                 }
             }, delay);
         } catch (Throwable ignore) {
@@ -354,6 +378,9 @@ public class AutoVipProHook {
 
     private static void tryScan(Class<?> c) {
         if (c == null || c.isInterface() || c.isAnnotation() || c.isEnum() || c.isPrimitive()) return;
+        // v1.8: 结构盲扫（不看名字）—— 对所有类先探测“会员状态对象”构造器结构，
+        //       命中精确 (Z,Enum,J,Z) 则独立挂钩（构造成激活位 + 混淆 boolean getter）。
+        try { tryEntitleShape(c); } catch (Throwable ignore) {}
         final boolean vipCls = isVipLikeClass(c);
         // v16: 会员信息类先扫一遍静态字段(按原值类别改写存储态)
         if (vipCls) {
@@ -371,6 +398,113 @@ public class AutoVipProHook {
             }
         }
     }
+
+    // ==================================================================
+    // v1.8：结构盲扫 tryEntitleShape —— 不看类名/方法名，纯按“会员状态对象”
+    //       构造器结构签名 扫内存对象型会员态（并入 v1.7 移除的 C/ProActivator 能力，
+    //       去白名单泛化到所有勾选 App）。
+    // ==================================================================
+    /** 强命中过的类（已 hook 构造器/getter 或已观测），避免重复处理。 */
+    private static final java.util.Set<String> entitleHooked =
+            Collections.synchronizedSet(new HashSet<String>());
+
+    /**
+     * 结构探测：类含 ≥1 个 boolean 字段，且存在“会员状态对象”典型构造器
+     * (boolean, Enum, long, boolean)。命中则对构造器（写激活位）与该类所有
+     * 无参 public boolean getter（混淆 a()）挂钩；非此精确签名一律忽略，
+     * 避免刷屏误伤（宁漏勿伤）。
+     */
+    private static void tryEntitleShape(Class<?> c) {
+        // 1) 先看是否有 boolean 字段（激活位通常是个实例 boolean 字段）
+        boolean hasBoolField = false;
+        Field[] fields;
+        try { fields = c.getDeclaredFields(); } catch (Throwable t) { fields = null; }
+        if (fields != null) {
+            for (Field f : fields) {
+                if (f.getType() == boolean.class) { hasBoolField = true; break; }
+            }
+        }
+        if (!hasBoolField) return;   // 连 boolean 字段都没有，不可能是会员状态对象
+
+        Constructor<?> strong = null;   // 精确 (Z,Enum,J,Z)
+        Constructor<?>[] ctors;
+        try { ctors = c.getDeclaredConstructors(); } catch (Throwable t) { ctors = null; }
+        if (ctors == null) return;
+        for (Constructor<?> ctor : ctors) {
+            Class<?>[] p = ctor.getParameterTypes();
+            if (p.length == 4
+                    && p[0] == boolean.class
+                    && p[1].isEnum()
+                    && p[2] == long.class
+                    && p[3] == boolean.class) {
+                strong = ctor;         // 精确 Entitlement 结构
+                break;
+            }
+        }
+        if (strong != null) {
+            if (!entitleHooked.add(c.getName())) return;
+            entitleStrongHit(c, strong);
+        }
+    }
+
+    /** 精确命中：观测或 hook（构造器首参 true + 该类所有无参 public boolean getter→true）。 */
+    private static void entitleStrongHit(Class<?> c, Constructor<?> strong) {
+        // 描述构造器签名
+        StringBuilder sig = new StringBuilder("(");
+        for (Class<?> pt : strong.getParameterTypes()) {
+            sig.append(sig.length() == 1 ? "" : ",")
+               .append(pt.isEnum() ? "E:" + pt.getSimpleName()
+                       : (pt == boolean.class ? "Z" : pt == long.class ? "J" : pt.getSimpleName()));
+        }
+        sig.append(")");
+        if (LOG_ONLY) {
+            entitleHookedCnt++;
+            XposedBridge.log(TAG + " [结构观测] PRO状态对象结构命中: " + c.getName()
+                    + " 构造器" + sig + " (类名/方法名可全混淆, 纯结构识别)"
+                    + " -> 可注入 构造首参true + boolean getter→true; LOG_ONLY 仅观测不改值  累计="
+                    + entitleHookedCnt);
+            return;
+        }
+        // 注入：hook 构造器，把激活位 boolean 参数置 true
+        try {
+            XposedBridge.hookMethod(strong, new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) {
+                    if (param.args != null && param.args.length > 0
+                            && param.args[0] instanceof Boolean) {
+                        param.args[0] = Boolean.TRUE;   // 第一个布尔参数=激活位=true
+                    }
+                }
+            });
+            entitleHookedCnt++;
+            XposedBridge.log(String.format("%s 结构挂钩构造器: %s %s -> 首参true  累计=%d",
+                    TAG, c.getName(), sig, entitleHookedCnt));
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + " 结构挂钩构造器失败 " + c.getName() + ": " + t);
+        }
+        // 双保险：该类所有无参 public boolean getter(混淆 a() 亦中) 强制 true
+        try {
+            for (Method m : c.getDeclaredMethods()) {
+                int mod = m.getModifiers();
+                if (m.getReturnType() != boolean.class) continue;
+                if (Modifier.isStatic(mod) || !Modifier.isPublic(mod)) continue;
+                if (m.getParameterTypes().length != 0) continue;
+                XposedBridge.hookMethod(m, new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        param.setResult(Boolean.TRUE);
+                    }
+                });
+                entitleHookedCnt++;
+                XposedBridge.log(TAG + "  结构挂钩 boolean getter: " + c.getName()
+                        + "." + m.getName() + "() -> true  累计=" + entitleHookedCnt);
+            }
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + " 结构挂钩 getter 失败 " + c.getName() + ": " + t);
+        }
+    }
+
+    private static volatile int entitleHookedCnt = 0;
 
     /** 对单个方法做门禁判断。vipCls=方法所在类是否为"会员信息类"(类名门禁命中)。
      *  vipCls 时放宽"方法名必须自带 vip/pro 词"——类名已提供会员语境，只要类型/
