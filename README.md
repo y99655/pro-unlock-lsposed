@@ -1,63 +1,65 @@
-# ProUnlock —— LSPosed 通杀模块（com.mobilecad.app 系列）
+# ProUnlock —— LSPosed 通杀模块（com.mobilecad.app 系列 / 指尖3D / Digit3D）
 
 ## 它能做什么
-针对 `com.mobilecad.app`（Digit 3D / 指尖3D 系列）的 PRO 激活做"通杀"解锁。
-原理：Hook **Google Play Billing** 的 `BillingClient.queryPurchasesAsync(...)`，
-在应用查询已购记录时回灌一笔"已购买 `unlock_pro` / `unlock_pro_2`"的伪造订单，
-让应用认为自己已拥有 PRO。
+针对 `com.mobilecad.app`（Digit 3D / 指尖3D 系列）的 PRO 激活做**真·通杀**解锁。
+原理：在运行时**强制应用内部 PRO 状态对象的"激活布尔位"为 true**，
+让应用认为自己已拥有 PRO——与服务端、与 Google Play 计费都无关。
 
-## 为什么这是真正的"通杀"，而 smali 补丁不是
-- 之前的 `universal_patch.py`（smali 重打包）写死了 `q5/o0`、`z5/l0` 等类名。
-  但每次构建 R8/ProGuard 都会重新混淆，类名随版本而变——
-  `Digit3D-1.3.0 / 1.3.1` 的 dex 里**根本找不到 `q5/o0`、`z5/l0`**，
-  且该谷歌版激活走的是"Google Play 购买"而非"本地状态类"，
-  所以 smali 补丁对这两个版本 0 命中，无法通杀。
-- 本模块 Hook 的是 **Google 官方 SDK 类名**（`com.android.billingclient.api.*`），
-  这些类**不参与应用自身混淆**，跨版本/跨混淆方案都稳定不变。
-  只要目标 App 用 Google Play Billing 做 PRO 激活（已确认：商品 id `unlock_pro`、`unlock_pro_2`），
-  本模块即可生效，与 App 怎么改名无关 → 这才是通杀。
+## 为什么之前"Hook 没效果"，以及现在为什么能通杀
+早先版本（v1）错误地假设本应用走 **Google Play Billing**（`unlock_pro` / `unlock_pro_2`），
+去 Hook `BillingClient.queryPurchasesAsync` 回灌假订单。但 `指尖3D` 是国内 App，
+PRO 激活**根本不走 Google 计费**，所以那个 Hook 打不到任何点 → 完全无效。
+
+经对各版本 smali 逆向确认，PRO 状态存在应用**内部数据对象**里（如 1.3.2 的 `q5/o0`）：
+```
+field public final a:Z        <- 激活布尔位（PRO 是否激活）
+field public final b:L<枚举>; <- 档位枚举（standard / pro ...）
+field public final c:J        <- long（到期时间等）
+field public final d:Z        <- 另一个布尔位
+.method public constructor <init>(ZL<枚举>;JZ)V
+    iput-boolean p1, p0, ->a:Z   # 第一个布尔参数 = 激活位
+```
+- 字段 `a` 是 `final`，**构造后不可变** → 只要在构造时把第一个布尔参数强制成 `true`，
+  应用之后读到的永远是"已激活"。这正是此前 smali 通杀补丁能成功的根本原因。
+- 构造签名 `(Z, 枚举, long, Z)V` 在 1.3.0 / 1.3.1 / 1.3.2 中**稳定一致**，
+  但混淆后的**类名会变**（q5/o0 只是 1.3.2 的样子）。
+
+因此本模块（v2）的策略是：在运行时**扫描 `com.mobilecad.app` 包下所有类**，
+找出"构造签名为 `(Z, Enum, long, Z)` 且类含 boolean/enum/long 字段"的类，
+对其构造器挂钩，在 `beforeHook` 里强制 `args[0] = true`。
+**不写死任何类名**，所以跨版本、跨混淆都通杀。
+
+> 兜底：若某版本确实是 Google Play 购买型（走 `BillingClient`），模块仍会尝试回灌
+> 已购记录（`BillingHook`，对标准版是空操作、无害），双保险。
 
 ## 编译（两种方式）
 
 ### 方式 A：GitHub Actions 在线编译（推荐，零本地环境）
-本仓库已内置 `.github/workflows/build.yml`，你只需：
-1. 把本目录推送到你自己的 GitHub 仓库（main/master 分支）。
+本仓库已内置 `.github/workflows/build.yml`：
+1. 把本目录推送到你自己的 GitHub 仓库（main 分支）。
 2. 在仓库 **Actions** 页等 `Build LSPosed Module` 跑完（约 3–5 分钟）。
 3. 在对应 run 的 **Artifacts** 里下载 `ProUnlock-LSPosed-module`（即 `app-debug.apk`）。
 
-CI 产出的是 **debug 自动签名** 的 APK，可直接 `adb install` 并加载，**无需你提供 keystore**。
+CI 产出的是 **debug 自动签名** 的 APK，可直接 `adb install` 并加载，**无需 keystore**。
 
 ### 方式 B：本地 Android Studio / Gradle 编译
 需要本地装有 Android SDK（compileSdk 34）+ JDK 17：
 - 用 Android Studio 打开本目录，Gradle Sync 后 `Build → Build APK(s)`。
-- 或命令行（本地有 Gradle ≥ 8.2，或先 `gradle wrapper` 生成 wrapper）：
-  ```bash
-  cd lsposed_pro_unlock
-  gradle assembleDebug        # 产出 app/build/outputs/apk/debug/app-debug.apk（debug 自签，可直接装）
-  # 或 gradle assembleRelease 后再自行用 apksigner 签名
-  ```
+- 或命令行：`gradle assembleDebug`（产出 `app/build/outputs/apk/debug/app-debug.apk`）。
 
 ## 部署
 1. 手机已安装 **LSPosed**（Magisk + Zygisk 或 Riru 方案）。
 2. 把编译出的模块 APK 装入手机，在 LSPosed 管理器中**勾选本模块**，
    并在**作用域里勾选目标应用 `com.mobilecad.app`**。
 3. **重启目标应用**（或重启系统）。
-4. 启动应用，PRO 应直接处于已激活状态（无需购买、无需联网到 127.0.0.1）。
+4. 启动应用，PRO 应直接处于已激活状态（无需购买、无需联网）。
 
 ## 验证
 - LSPosed 日志（或 `adb logcat | grep ProUnlock`）应出现：
-  `queryPurchasesAsync -> 注入 2 笔假订单`
+  `[ProUnlock] 挂钩 PRO 构造器: com.mobilecad.app.xxx.yyy`
+  `[ProUnlock] PRO 构造器扫描完成，共挂钩 N 个`
+- 若日志显示**挂钩 0 个**，说明该版本构造签名有变化，请把机型/版本号回报以便适配。
 - 应用内"升级 PRO / 解锁 Pro"页应显示已拥有。
-
-## 已知边界（如失效请排查）
-1. **服务端校验**：若应用把购买 token 发到自己的后端做二次校验，
-   本地伪造订单拿不到合法 token，后端会判无效。届时需要额外 Hook 应用的
-   校验/ entitlement 网络返回（在 `BillingHook.hookVerifySignature` 已尽力对
-   `Purchase` 上的 `verifySignature/verifyPurchase/isSignatureValid` 做强制 true，
-   但若校验在别处，需按实际情况补 hook）。
-2. **商品 id 变化**：若某版本 sku 改名，改 `BillingHook.SKUS` 数组即可。
-3. **非 Play 渠道版**：纯离线/其他渠道激活不走 Play Billing 的，本模块不适用
-   （那种仍走本地状态类，需用 smali 补丁针对具体混淆适配）。
 
 ## 文件结构
 ```
@@ -69,7 +71,8 @@ lsposed_pro_unlock/
         ├── AndroidManifest.xml        # xposedmodule 声明
         ├── assets/xposed_init        # 入口类 com.example.prounlock.Main
         └── java/com/example/prounlock/
-            ├── Main.java              # IXposedMod 入口
-            ├── BillingHook.java       # 计费 Hook 核心
+            ├── Main.java              # 入口，命中 com.mobilecad.app 后挂 ProUnlock + BillingHook
+            ├── ProUnlock.java         # 核心：扫描并强制 PRO 对象激活位（真·通杀）
+            ├── BillingHook.java       # 兜底：Google Play 购买型版本回灌假订单
             └── MainActivity.java      # 占位 UI
 ```
