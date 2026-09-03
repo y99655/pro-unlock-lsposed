@@ -66,9 +66,17 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
  *   按【列名语义】把“布尔会员位列/等级列”读取改写为开通态；到期列因秒/毫秒二义
  *   只观测不强注入。默认 LOG_ONLY=true 只打 [UDB] 观测。仅自有/授权 App 自测。
  *
- * 用法：LSPosed 作用域勾选目标 App（B/D/E/F/G 全通道都只在勾选 App 的进程内
+ * 【I】第三方广告 SDK 去广告通道（AdBlockHook）
+ *   用户希望“判断出广告类、直接关闭广告”（第三方广告 SDK 型：AdMob/穿山甲/优量汇/
+ *   百青藤等）。这类 SDK 类名固定、公开可枚举，故用 L1【包名前缀白名单】精确判断
+ *   （不看类名猜，零误伤）。整类屏蔽：hook 应用 ClassLoader.loadClass，命中广告前缀
+ *   即抛 ClassNotFoundException —— 广告 SDK 的类永远加载不起来、不出广告。
+ *   默认 ADBLOCK_ON=true 启用；AdBlockHook.LOG_ONLY=true 可切观测(只打 [UAd] 不拦)。
+ *   只拦明确列出的广告包名，不碰同厂统计/推送/崩溃 SDK。仅自有/授权 App 自测。
+ *
+ * 用法：LSPosed 作用域勾选目标 App（B/D/E/F/G/I 全通道都只在勾选 App 的进程内
  * 生效，不再对未勾选应用操作），软重启后看日志 [UVip] / [UBilling] / [UNet]
- * / [URule] / [UAuto] / [UDB]。
+ * / [URule] / [UAuto] / [UDB] / [UAd]。
  */
 public class Main implements IXposedHookLoadPackage {
 
@@ -132,6 +140,15 @@ public class Main implements IXposedHookLoadPackage {
             AutoVipProHook.hook(cl, lpparam.packageName);
         } catch (Throwable t) {
             XposedBridge.log("[UAuto] 挂载失败: " + t);
+        }
+
+        // 【I】第三方广告 SDK 去广告通道（AdBlockHook）——按广告 SDK 包名前缀白名单整类
+        //     屏蔽其类加载(loadClass 命中即抛 CNFE, 广告不出)。默认 ADBLOCK_ON=true 启用；
+        //     LOG_ONLY=true 可切观测。仅自有/授权 App 自测。
+        try {
+            AdBlockHook.hook(cl, lpparam.packageName);
+        } catch (Throwable t) {
+            XposedBridge.log("[UAd] 挂载失败: " + t);
         }
 
         // 【H】通道已移除(v1.6)：TimeFreezeHook(时间冻结/拨回) 经评估不再需要，
