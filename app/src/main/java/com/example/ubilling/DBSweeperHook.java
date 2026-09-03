@@ -13,7 +13,6 @@ import java.util.WeakHashMap;
 
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
-import de.robv.android.xposed.XposedHelpers;
 
 /**
  * 【G】SQLite / DB 会员判定盲扫通道（DBSweeperHook）—— 覆盖“会员态存在本地
@@ -148,7 +147,7 @@ public class DBSweeperHook {
                 return;
             }
             for (final Method m : targets) {
-                XposedHelpers.hookMethod(m, new XC_MethodHook() {
+                XposedBridge.hookMethod(m, new XC_MethodHook() {
                     @Override protected void afterHookedMethod(MethodHookParam param) {
                         try {
                             Object cs = param.getResult();
@@ -218,7 +217,7 @@ public class DBSweeperHook {
     private static void hookCursorRead(final Class<?> owner, final String mname, Class<?>... pt) {
         try {
             Method m = owner.getDeclaredMethod(mname, pt);
-            XposedHelpers.hookMethod(m, new XC_MethodHook() {
+            XposedBridge.hookMethod(m, new XC_MethodHook() {
                 @Override protected void afterHookedMethod(MethodHookParam param) {
                     try {
                         Object cursor = param.thisObject;
