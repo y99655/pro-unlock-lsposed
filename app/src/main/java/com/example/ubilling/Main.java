@@ -74,9 +74,22 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
  *   默认 ADBLOCK_ON=true 启用；AdBlockHook.LOG_ONLY=true 可切观测(只打 [UAd] 不拦)。
  *   只拦明确列出的广告包名，不碰同厂统计/推送/崩溃 SDK。仅自有/授权 App 自测。
  *
- * 用法：LSPosed 作用域勾选目标 App（B/D/E/F/G/I 全通道都只在勾选 App 的进程内
- * 生效，不再对未勾选应用操作），软重启后看日志 [UVip] / [UBilling] / [UNet]
- * / [URule] / [UAuto] / [UDB] / [UAd]。
+ * ============================================================================
+ * v1.12 新增：
+ *   1) 【每通道打勾总开关】—— 打开模块的 MainActivity(桌面"kill vip"图标)，
+ *      为 A/Billing / B/UVip / D/NetLab / E/MethodRule / F/Auto / G/DB / I/去广告
+ *      各勾一个开关。勾选→该通道对作用域内勾选 App 生效；不打勾→该通道完全不挂载。
+ *      勾选存模块 SharedPreferences("ubilling_settings")，被 hook 的 App 进程用
+ *      XSharedPreferences 读到（Settings.channelOn）。改完需软重启/重启目标 App。
+ *      默认全部勾选(向后兼容：不打开 UI 时行为与 v1.11 一致)。
+ *   2) 【广告护栏 AdGuard】—— 防止 VIP 注入把广告激活：B/F/G 在注入前判定候选是否
+ *      属广告服务控制上下文(广告SDK类/广告开关类SP key/方法/列)，是则跳过注入并打
+ *      [UAdGuard] 观测日志，便于用户实测是哪个通道把哪个广告相关东西判成了会员。
+ *      与去广告通道 I(AdBlockHook 整类屏蔽)互补。
+ *
+ * 用法：LSPosed 作用域勾选目标 App（各通道是否生效 = 作用域勾选 ∧ MainActivity 里该通道
+ * 打勾；都只在勾选 App 的进程内生效）。日志 [UVip]/[UBilling]/[UNet]/[URule]/[UAuto]/
+ * [UDB]/[UAd]；广告护栏跳过 [UAdGuard]。
  */
 public class Main implements IXposedHookLoadPackage {
 
@@ -94,13 +107,32 @@ public class Main implements IXposedHookLoadPackage {
         final ClassLoader cl = lpparam.classLoader;
         if (cl == null) return;
 
+        // ==================================================================
+        // 每通道总开关(v1.12)：MainActivity 里打勾才让该通道对作用域 App 生效。
+        // 默认 true(向后兼容)。改完勾选需软重启/重启目标 App 才会让新配置进到本进程。
+        // ==================================================================
+        boolean onBilling    = Settings.channelOn(Settings.K_BILLING);
+        boolean onUVip       = Settings.channelOn(Settings.K_UVIP);
+        boolean onNetLab     = Settings.channelOn(Settings.K_NETLAB);
+        boolean onMethodRule = Settings.channelOn(Settings.K_METHODRULE);
+        boolean onAutoVip    = Settings.channelOn(Settings.K_AUTOVIP);
+        boolean onDB         = Settings.channelOn(Settings.K_DB);
+        boolean onAdBlock    = Settings.channelOn(Settings.K_ADBLOCK);
+        XposedBridge.log("[killvip] 通道开关 @ " + lpparam.packageName
+                + " A/Billing=" + onBilling + " B/UVip=" + onUVip
+                + " D/NetLab=" + onNetLab + " E/MethodRule=" + onMethodRule
+                + " F/Auto=" + onAutoVip + " G/DB=" + onDB + " I/AdBlock=" + onAdBlock);
+
         // 【B】全兼容自动 VIP 拦截（SP 多语义 + 观测学习）。
         // v14 起【不再】在 initZygote 全系统挂载，而是改在此处按目标进程挂载——
         // 借 LSPosed 的作用域机制，让 SP 拦截只作用于被勾选的 App，不动其它应用。
-        try {
-            UniversalVipSweeper.hook();
-        } catch (Throwable t) {
-            XposedBridge.log("[UVip] 挂载失败: " + t);
+        // v1.12：MainActivity 不打勾(B/UVip)则整个 B 通道不挂载。
+        if (onUVip) {
+            try {
+                UniversalVipSweeper.hook();
+            } catch (Throwable t) {
+                XposedBridge.log("[UVip] 挂载失败: " + t);
+            }
         }
 
         // 【C】通道已移除(v1.7)：ProActivator(指尖3D 专用定向白名单) 不再单列；
@@ -110,51 +142,69 @@ public class Main implements IXposedHookLoadPackage {
         // 【D】联网鉴权抗 hook 自测通道（NetLabHook）——对每个勾选进程尝试；
         //     内部按“是否加载 okhttp3/WebView”自动决定挂哪些面，无对应类即静默跳过。
         //     默认只观测(LOG_ONLY=true)；自测实战需改 NetLabHook 常量并重建。
-        try {
-            NetLabHook.hook(cl, lpparam.packageName);
-        } catch (Throwable t) {
-            XposedBridge.log("[UNet] 挂载失败: " + t);
+        //     v1.12：MainActivity 不打勾(D/NetLab)则跳过。
+        if (onNetLab) {
+            try {
+                NetLabHook.hook(cl, lpparam.packageName);
+            } catch (Throwable t) {
+                XposedBridge.log("[UNet] 挂载失败: " + t);
+            }
         }
 
         // 【E】配置化精确返回值 Hook（MethodRuleHook）——按 MethodRuleHook.RULES
         //     里“类.方法 -> 返回值”精确改写；规则为空则静默跳过。仅自有/授权 App 自测。
-        try {
-            MethodRuleHook.hook(cl, lpparam.packageName);
-        } catch (Throwable t) {
-            XposedBridge.log("[URule] 挂载失败: " + t);
+        //     v1.12：MainActivity 不打勾(E/MethodRule)则跳过。
+        if (onMethodRule) {
+            try {
+                MethodRuleHook.hook(cl, lpparam.packageName);
+            } catch (Throwable t) {
+                XposedBridge.log("[URule] 挂载失败: " + t);
+            }
         }
 
         // 【G】SQLite/DB 会员盲扫通道（DBSweeperHook）——hook SQLiteDatabase 出口 +
         //     AbstractCursor 读取，按列名语义改写会员列。默认 LOG_ONLY 只打 [UDB] 观测。
-        try {
-            DBSweeperHook.hook(cl, lpparam.packageName);
-        } catch (Throwable t) {
-            XposedBridge.log("[UDB] 挂载失败: " + t);
+        //     v1.12：MainActivity 不打勾(G/DB)则跳过。
+        if (onDB) {
+            try {
+                DBSweeperHook.hook(cl, lpparam.packageName);
+            } catch (Throwable t) {
+                XposedBridge.log("[UDB] 挂载失败: " + t);
+            }
         }
 
         // 【F】全 VIP/PRO 自动盲扫通道（AutoVipProHook）——按方法名强词表自动发现并
         //     改写会员判定 getter，并入结构盲扫(内存对象构造器签名)。v1.10 两级闸门：
         //     结构(Z,Enum,J,Z)+STRONG_BOOL 恒注入；宽泛(inVipContext/档位getter/字段扫)
         //     受 INJECT_WIDE(默认 false=仅观测)。仅自有/授权 App 自测。
-        try {
-            AutoVipProHook.hook(cl, lpparam.packageName);
-        } catch (Throwable t) {
-            XposedBridge.log("[UAuto] 挂载失败: " + t);
+        //     v1.12：MainActivity 不打勾(F/Auto)则跳过。
+        if (onAutoVip) {
+            try {
+                AutoVipProHook.hook(cl, lpparam.packageName);
+            } catch (Throwable t) {
+                XposedBridge.log("[UAuto] 挂载失败: " + t);
+            }
         }
 
         // 【I】第三方广告 SDK 去广告通道（AdBlockHook）——按广告 SDK 包名前缀白名单整类
         //     屏蔽其类加载(loadClass 命中即抛 CNFE, 广告不出)。默认 ADBLOCK_ON=true 启用；
         //     LOG_ONLY=true 可切观测。仅自有/授权 App 自测。
-        try {
-            AdBlockHook.hook(cl, lpparam.packageName);
-        } catch (Throwable t) {
-            XposedBridge.log("[UAd] 挂载失败: " + t);
+        //     v1.12：MainActivity 不打勾(I/去广告)则整个去广告通道不挂载。
+        if (onAdBlock) {
+            try {
+                AdBlockHook.hook(cl, lpparam.packageName);
+            } catch (Throwable t) {
+                XposedBridge.log("[UAd] 挂载失败: " + t);
+            }
         }
 
         // 【H】通道已移除(v1.6)：TimeFreezeHook(时间冻结/拨回) 经评估不再需要，
         //     避免对进程当前时间做全局回调带来的副作用。仅保留 G(DB盲扫)+F(自动盲扫)。
 
         // 探测目标进程是否真的用了 Google Play Billing SDK
+        if (!onBilling) {
+            return; // v1.12: MainActivity 不打勾(A/Billing)，连探测也跳过
+        }
         boolean hasBilling;
         try {
             Class.forName("com.android.billingclient.api.BillingClient", false, cl);

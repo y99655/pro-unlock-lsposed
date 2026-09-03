@@ -9,12 +9,17 @@
         <meta-data
             android:name="xposedmodule"
             android:value="true" />
+        <!-- xposedminversion=93 + xposedsharedprefs：启用 LSPosed "New XSharedPreferences"，
+             使模块 UI(MODE_WORLD_READABLE) 的勾选能被被 hook 进程跨进程读到。 -->
         <meta-data
             android:name="xposedminversion"
-            android:value="53" />
+            android:value="93" />
+        <meta-data
+            android:name="xposedsharedprefs"
+            android:value="true" />
         <meta-data
             android:name="xposeddescription"
-            android:value="kill vip: VIP/PRO解锁+第三方广告SDK屏蔽(AdMob/穿山甲/优量汇/百青藤等) v1.11 仅作用域勾选App生效" />
+            android:value="kill vip: VIP/PRO解锁(每通道可勾选开关)+去广告+广告护栏 v1.12 仅作用域勾选App生效" />
 
         <activity
             android:name=".MainActivity"

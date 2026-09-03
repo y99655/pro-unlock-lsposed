@@ -134,6 +134,11 @@ public class AdBlockHook {
         if (cl == null || pkg == null) return;
         if (TARGET_PKG != null && !TARGET_PKG.equals(pkg)) return;
         if (!donePkg.add(pkg)) return;
+        // v1.12: MainActivity 打勾(I/去广告)才生效；不打勾则整个去广告通道停用。
+        if (!Settings.channelOn(Settings.K_ADBLOCK)) {
+            XposedBridge.log(TAG + " 去广告通道停用(MainActivity 未勾选 I/去广告) @ " + pkg);
+            return;
+        }
         if (!ADBLOCK_ON) {
             XposedBridge.log(TAG + " ADBLOCK_ON=false, 去广告通道停用 @ " + pkg);
             return;

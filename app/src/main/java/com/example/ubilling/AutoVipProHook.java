@@ -255,6 +255,18 @@ public class AutoVipProHook {
     private static volatile int candTier = 0;
     private static volatile int hookedCnt = 0;
 
+    /** 广告护栏跳过去重(避免对同一候选刷屏)。 */
+    private static final Set<String> adSkipLogged =
+            java.util.Collections.synchronizedSet(new HashSet<String>());
+
+    /** 打一条 [UAdGuard] 跳过日志（去重）。 */
+    private static void logAdSkip(Class<?> c, String member, String kind) {
+        String sig = c.getName() + "." + member;
+        if (adSkipLogged.add(sig)) {
+            AdGuard.logSkipped("F/Auto", kind, sig);
+        }
+    }
+
     // ==================================================================
     // 入口
     // ==================================================================
@@ -421,6 +433,13 @@ public class AutoVipProHook {
 
     private static void tryScan(Class<?> c) {
         if (c == null || c.isInterface() || c.isAnnotation() || c.isEnum() || c.isPrimitive()) return;
+        // v1.12 广告护栏(AdGuard)：广告 SDK 的类整类不作会员类扫 —— 其内部形似 isEnabled/
+        //   isActive/isShow 的方法/字段若被强制 true，可能把广告逻辑激活。直接跳过该类的
+        //   方法/字段盲扫(仍可被 AdBlockHook 去广告整类屏蔽，两者互补)。
+        if (AdGuard.isAdSdkClass(c.getName())) {
+            XposedBridge.log(TAG + " [UAdGuard] 跳过广告SDK类扫描: " + c.getName());
+            return;
+        }
         // v1.8: 结构盲扫（不看名字）—— 对所有类先探测“会员状态对象”构造器结构，
         //       命中精确 (Z,Enum,J,Z) 则独立挂钩（构造成激活位 + 混淆 boolean getter）。
         try { tryEntitleShape(c); } catch (Throwable ignore) {}
@@ -560,6 +579,13 @@ public class AutoVipProHook {
         String low = name.toLowerCase(Locale.ROOT);
         // 门禁1a: 硬放行工具/时间/状态布尔
         for (String hp : HARD_PASS) if (low.contains(hp)) return;
+        // v1.12 广告护栏(AdGuard)：方法名若属【广告服务控制】(adShow/loadAd/showBanner/
+        //   openSplash/rewardReady…)，强制 true 可能把广告激活 -> 不按会员注入。
+        //   （若所在类已是广告SDK类，上面 tryScan 已整类跳过，这里兜底非广告类里的广告控件方法。）
+        if (AdGuard.isAdControl(low)) {
+            logAdSkip(c, name, "方法");
+            return;
+        }
 
         Class<?> ret = m.getReturnType();
 
@@ -715,6 +741,11 @@ public class AutoVipProHook {
                 boolean hp = false;
                 for (String h : HARD_PASS) if (fn.contains(h)) { hp = true; break; }
                 if (hp) continue;                              // 工具/时间布尔名 -> 跳过
+                // v1.12 广告护栏：字段名若属广告服务控制上下文，强制改它可能激活广告 -> 跳过
+                if (AdGuard.isAdControl(fn)) {
+                    logAdSkip(c, f.getName(), "字段");
+                    continue;
+                }
                 boolean nameMem = fieldMemName(fn);
                 // 字段名无会员语义 且 类也非强会员类 -> 跳过(避免处理 id/name 等普通字段)
                 if (!nameMem && !strongCls) continue;
@@ -827,6 +858,11 @@ public class AutoVipProHook {
                 boolean hp = false;
                 for (String h : HARD_PASS) if (fn.contains(h)) { hp = true; break; }
                 if (hp) continue;
+                // v1.12 广告护栏：单例实例字段若属广告服务控制上下文 -> 跳过，防激活广告
+                if (AdGuard.isAdControl(fn)) {
+                    logAdSkip(c, f.getName(), "字段");
+                    continue;
+                }
                 boolean nameMem = fieldMemName(fn);
                 if (!nameMem && !strongCls) continue;
                 boolean dateish = hasAnyCat(fn, CAT_DATE_HINT);

@@ -10,6 +10,24 @@
 - **【G】SQLite/DB 会员盲扫（DBSweeperHook，授权自测用）** —— 覆盖"会员态存本地 SQLite/Room 表、判定时 SELECT 出来比"的 App。hook `SQLiteDatabase.rawQuery/query` 出口 + `AbstractCursor` 的 `getString/getInt/getLong`，按**列名语义**把"布尔会员位列→true/1、等级列→顶级档"的读取改写成开通态；到期列因秒/毫秒二义只观测不强注入。默认 LOG_ONLY=只打 [UDB] 观测。
 - **【I】第三方广告 SDK 去广告（AdBlockHook）** —— 直接屏蔽主流商业广告 SDK 的类加载（AdMob/穿山甲/优量汇/百青藤/快手/汇量/Mintegral 等）。判断用 L1 **包名前缀白名单**（广告 SDK 类名固定可枚举，不猜）：hook 应用 `ClassLoader.loadClass`，命中广告前缀即抛 `ClassNotFoundException` → 广告 SDK 整个加载不起来、不出广告。默认 `ADBLOCK_ON=true` 启用；`AdBlockHook.LOG_ONLY=true` 可切仅观测（打 [UAd] 不拦）。只拦明确列出的广告包名，不碰同厂统计/推送/崩溃 SDK。仅自有/授权 App 自测。
 
+> ### 🆕 v1.12 更新：每通道打勾开关 + 广告护栏（防 VIP 注入把广告激活）
+>
+> **【每通道总开关】** 打开模块桌面入口（`kill vip` → MainActivity），为 A/Billing、
+> B/UVip、D/NetLab、E/MethodRule、F/Auto、G/DB、I/去广告 各一个勾选框。打勾 → 该通道
+> 对作用域勾选 App 生效；**不打勾 → 该通道完全不挂载**。勾选存模块自己的
+> `SharedPreferences("ubilling_settings")`；被 hook 的 App 进程用 LSPosed 的
+> `XSharedPreferences` 读到（`Settings.channelOn`，reload 节流）。改完勾选需【软重启 /
+> 重启目标 App】。**默认全部开启**（不打开 UI 时行为与 v1.11 一致，向后兼容）。
+> 依赖：`xposedminversion` 提到 **93** 并加 `xposedsharedprefs=true`，启用 LSPosed
+> "New XSharedPreferences"，使 `MODE_WORLD_READABLE` 的勾选能跨进程读到。
+>
+> **【广告护栏 AdGuard】** 用户反馈"之前的通道会激活部分广告"。新增 `AdGuard.java`：
+> 让 VIP 解锁通道（B/UVip、F/Auto、G/DB）在**注入前**判定候选是否属"广告服务控制/激活/
+> 展示"上下文（广告 SDK 类、`banner_enable`/`ad_show`/`splashad`/`ad_load`/`cpm_init`/
+> `ad_ready` 这类开关、方法、DB 列）——是则**跳过注入**（绝不把广告打开）并打一条
+> `[UAdGuard]` 观测日志，便于实测是哪个通道把哪个广告相关对象判成了会员。
+> 与【I】AdBlockHook 整类屏蔽**互补**：AdGuard 管"别被 VIP 注入激活广告"，AdBlock 管"把广告 SDK 屏蔽掉"。
+
 与 `lsposed_pro_unlock`（只针对 `com.mobilecad.app` 的专版）不同，本模块 VIP/PRO 解锁通道**代码层面无包名白名单**——
 但 **v14 起全部通道只作用于你在 LSPosed 作用域里勾选的 App**（借 LSPosed 的进程分发机制），
 绝不对未勾选应用 / 系统进程做任何拦截或改写。
@@ -170,13 +188,15 @@
 
 ```
 app/src/main/java/com/example/ubilling/
-├── Main.java                  # 入口：按作用域进程挂载 B/D/E/F/G + A(有 Billing SDK 时)
+├── Main.java                  # 入口：按作用域进程 + 每通道勾选开关挂载 A/B/D/E/F/G/I
 ├── UniversalBillingHook.java  # 【A】通用 Billing hook（回灌已购 + 探测 SKU）
 ├── UniversalVipSweeper.java   # 【B】自动 VIP 拦截 + 观测学习闭环（SP + 词表 + 类型自适应 + 规则回灌）——只作用域勾选 App
 ├── NetLabHook.java            # 【D】联网抗hook自测: 响应篡改/pinning探测/WebView JS面
 ├── MethodRuleHook.java        # 【E】配置化精确返回值 Hook：类.方法 -> 返回值(按返回类型自动转换)
-├── AutoVipProHook.java        # 【F】自动盲扫: 方法名/类名强词 + 字段按原值类别 + 单例实例字段注入 + 结构盲扫(内存对象构造器签名) v1.10两级闸门:结构+STRONG_BOOL恒注入/宽泛受INJECT_WIDE
+├── AutoVipProHook.java        # 【F】自动盲扫: 方法名/类名强词 + 字段按原值类别 + 单例实例字段注入 + 结构盲扫(内存对象构造器签名) v1.10两级闸门
 ├── AdBlockHook.java           # 【I】去第三方广告SDK: 包名前缀白名单整类屏蔽(loadClass抛CNFE), AdMob/穿山甲/优量汇/百青藤等
 ├── DBSweeperHook.java         # 【G】SQLite/DB 会员盲扫: hook query出口+Cursor读取, 按列名语义改写
-└── MainActivity.java          # 占位 UI
+├── AdGuard.java               # v1.12 广告护栏: 判断广告SDK类/广告服务控制(SP key/方法/列/类), B/F/G 注入前跳过, 防"VIP激活广告", 打 [UAdGuard]
+├── Settings.java              # v1.12 运行期配置读取: XSharedPreferences 读 MainActivity 勾选, Settings.channelOn 决定各通道是否挂载
+└── MainActivity.java          # v1.12 UI: 每通道打勾总开关(存 ubilling_settings, MODE_WORLD_READABLE)
 ```

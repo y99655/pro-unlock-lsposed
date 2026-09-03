@@ -164,6 +164,9 @@ public class UniversalVipSweeper {
     /** 进程级去重，避免同一 key 每次读都刷屏（日志用）。 */
     private static final Set<String> logged = java.util.Collections.synchronizedSet(new HashSet<String>());
 
+    /** 进程级去重：广告服务控制上下文 key 的 [UAdGuard] 跳过日志，避免刷屏。 */
+    private static final Set<String> adLogged = java.util.Collections.synchronizedSet(new HashSet<String>());
+
     // ==================================================================
     // ③ 观测学习（Learner）：记录到被观测 App 自己的 data 目录 + 规则回灌
     // ==================================================================
@@ -229,9 +232,19 @@ public class UniversalVipSweeper {
     /** 判定 key 是否命中任一词义（付费/档位/解锁/去广告/到期）。 */
     static boolean hit(String rawKey) {
         if (rawKey == null) return false;
+        // v1.12 广告护栏(AdGuard)：key 若属【广告服务控制/激活/展示】上下文(如 banner_enable/
+        //   ad_show/splashad/ad_load/cpm_init…)，注入它等于把广告放出来 -> 一律不判为会员、不注入，
+        //   打一次 [UAdGuard] 观测(便于用户实测是哪个通道把广告相关 key 判成了会员)。
+        String lowk = rawKey.toLowerCase();
+        if (AdGuard.isAdControl(lowk)) {
+            if (adLogged.add(rawKey)) {
+                AdGuard.logSkipped("B/UVip", "SP key", rawKey);
+            }
+            return false;
+        }
         // 业务时间戳护栏：last_app_modify_date 等即使被词表/旧规则命中也整体放行，
         // 绝不对其注入日期或 premium(真机反馈: DCloud 防二次打包字段曾被误注 2099)。
-        if (hasAny(rawKey.toLowerCase(), BIZ_TIMESTAMP)) return false;
+        if (hasAny(lowk, BIZ_TIMESTAMP)) return false;
         // SDK 基础设施护栏：HttpDns/广告/统计/初始化标志等 key 含 expire/activate/cpm 等
         // 易误判词，但本质与用户会员态无关，整体放行(真机反馈: cpm_expire_time/
         // sdk_activate_init/http_dns_refetch_on_expire 曾被误注)。此栏须在词表命中前。
@@ -262,6 +275,8 @@ public class UniversalVipSweeper {
     static boolean isDateKey(String rawKey) {
         if (rawKey == null) return false;
         String k = rawKey.toLowerCase();
+        // v1.12：广告服务控制上下文绝不按"会员到期"注入 2099(会误把广告相关时间戳当到期)
+        if (AdGuard.isAdControl(k)) return false;
         if (hasAny(k, BIZ_TIMESTAMP)) return false;
         // SDK 基础设施(key 名带 http_dns/cpm_/sdk_activate 等)绝不当“会员到期”注入
         if (hasAny(k, SDK_INFRA)) return false;

@@ -290,6 +290,9 @@ public class DBSweeperHook {
         if (col == null) return 0;
         String low = col.toLowerCase(Locale.ROOT);
         for (String h : HARD_PASS_COL) if (low.contains(h)) return 0;
+        // v1.12 广告护栏(AdGuard)：广告服务控制/缓存列(ad_cache/ads_state/banner…)
+        // 绝不按会员列改写 —— 强制改写可能把广告状态设成"开/已就绪"而激活广告。
+        if (AdGuard.isAdControl(low)) return 0;
         Integer cached = colSem.get(low);
         if (cached != null) return cached;
         int sem = 0;
