@@ -58,14 +58,42 @@
 **挂载点**：`Main.initZygote()` 系统级挂一次 → 对所有进程生效，与是否加载
 Billing SDK 无关（正好补上【A】“国内非 Billing App” 的空档）。
 
+### 【B+】观测学习闭环（v4，自学习扩大匹配面）
+
+词表是"拍脑袋"的，总会漏掉某 App 特有的 key（如混淆的 `a_b_c`、自造 `vip_token`）。
+为补齐这块，运行时加了**观测-学习-回灌**三层：
+
+1. **磁盘扫描（首次命中触发）**：扫目标 App 自己的
+   `/data/data/<该App>/shared_prefs/*.xml`，把所有"名字像会员 / 值带日期 /
+   值像已解锁"的条目找出来。
+2. **运行读取观测**：每次命中注入时，把 `key / 方法 / 形态` 追加记录。
+3. **规则回灌（持久化热加载）**：被确认存在"会员/日期形态"的 key 写入**内存规则表**，
+   并落盘为 `rules.txt` —— 之后每次启动先读回该表，即使该 key 完全不含词表关键词
+   也能命中并注入 —— 真正扩大了覆盖面，且"一次学会、重启仍生效"。
+
+观测记录写到**被观测 App 自己**的目录（zygote 级观测跑在目标 App 进程内、
+同 uid 才能写它自己的沙箱；写模块自己的目录会跨 uid 被拒）：
+
+```
+/data/data/<该App>/files/uvip/
+├── rules.txt    # 学习规则 (KEY<TAB>shape)，下次启动热加载；可手工增删
+├── records.txt  # 磁盘扫描出的会员/日期 key + 形态，供人工挑字段
+└── hits.log     # 运行命中的 key::method::形态
+```
+
+> 诚实边界：观测只能看到"当前(未付费)读取/存储"的形态，看不到"付费该返回什么"，
+> 因此具体注入值仍靠类型自适应（getXxx 已决定类型 + 日期统一 2099）。观测的真正
+> 增益是**自动锁定"哪些 key 是会员字段"**，即使它们是混淆 key 也能命中。
+
 ### 【B】的边界（务必知悉）
 
 - ✅ 覆盖 **"付费态存 SharedPreferences、本地读取即判定解锁"** 的 App。
 - ⚠️ 若 VIP 是 **服务器下发的 entitlement**、或 App 启动后**从网络拉取再覆盖 SP**，
   拦截会"读一次被盖一次"，不保证解锁。
 - ⚠️ 命中即**改写内存返回值，不改磁盘文件**，纯运行时注入，退出即失效。
-- 💡 即使某个 App 没解锁成功，**日志里的 `命中(自动赋值)` 行**也会告诉你它到底
-  读了哪些 `key`（如 `is_vip::getBoolean`），据此能人工判断 / 微调关键词表。
+- 💡 即使某个 App 没解锁成功，**日志里的 `命中(自动赋值)` 行**会告诉你它读了哪些
+  `key`；**观测记录**（`/data/data/<该App>/files/uvip/*`）会把磁盘里真正的会员/日期
+  key 也列出来，据此能人工判断 / 微调关键词表。
 
 ---
 
@@ -89,6 +117,6 @@ Billing SDK 无关（正好补上【A】“国内非 Billing App” 的空档）
 app/src/main/java/com/example/ubilling/
 ├── Main.java                  # 入口：探测 Billing SDK；initZygote 挂载 UVip
 ├── UniversalBillingHook.java  # 【A】通用 Billing hook（回灌已购 + 探测 SKU）
-├── UniversalVipSweeper.java   # 【B】自动 VIP 拦截（SharedPreferences + 关键词 + 类型自适应）
+├── UniversalVipSweeper.java   # 【B】自动 VIP 拦截 + 观测学习闭环（SP + 词表 + 类型自适应 + 规则回灌）
 └── MainActivity.java          # 占位 UI
 ```
