@@ -38,8 +38,24 @@ import de.robv.android.xposed.IXposedHookZygoteInit.StartupParam;
  *   任何改；填 NetLabHook.REPLACEMENTS / NEEDLE_JS 并关 LOG_ONLY 后重建，可对自己
  *   的 App 验证“改响应/注入 JS 能否得逞”，据此加固服务端。请勿用于破解他人服务。
  *
+ * 【E】配置化精确返回值 Hook（MethodRuleHook，仅授权自测）
+ *   支持“按 类.方法 -> 指定返回值”强制改写 App 里某个具名业务方法的返回。
+ *   覆盖“会员态由 cn.ms.util.CommonUtil.getLingPaiZuanShi() 这类【具名方法】判定、
+ *   不走 SP/Billing/构造器”的自有 App。规则配在 MethodRuleHook.RULES
+ *   （{类名, 方法名, 返回值, 参数类型可选}），返回值按方法真实返回类型自动转换。
+ *   中性技术能力，仅用于你自己/获授权 App 的防御自测，勿配规则去破解他人收费服务。
+ *
+ * 【F】全 VIP/PRO 自动盲扫通道（AutoVipProHook，仅授权自测）
+ *   不靠人工配置，按【方法名强词表】自动遍历目标 App 已加载类的无参 getter/isXxx/
+ *   hasXxx，找出“会员判定方法”(isVip/isPro/isPremium/getVipLevel 等)并强制改写，
+ *   覆盖“会员态由某个具名 getter 返回、不走 SP/Billing/人工配置”的自有 App。
+ *   默认 LOG_ONLY=true 只观测打 [UAuto] 日志，绝不改值 —— 先跑一轮看命中清单、
+ *   确认无误伤后，再把 AutoVipProHook.LOG_ONLY 置 false 重载模块做真实注入。
+ *   仅用于你自己/获授权 App 的防御自测。
+ *
  * 用法：LSPosed 作用域勾选目标 App（VIP 拦截因是 zygote 级，勾“系统框架”
- * 即可对全部 App 生效），重启后看日志 [UBilling] / [UVip] / [UPro] / [UNet]。
+ * 即可对全部 App 生效），重启后看日志 [UBilling] / [UVip] / [UPro] / [UNet] / [URule]
+ * / [UAuto]。
  */
 public class Main implements IXposedHookLoadPackage, IXposedHookZygoteInit {
 
@@ -74,6 +90,23 @@ public class Main implements IXposedHookLoadPackage, IXposedHookZygoteInit {
             NetLabHook.hook(cl, lpparam.packageName);
         } catch (Throwable t) {
             XposedBridge.log("[UNet] 挂载失败: " + t);
+        }
+
+        // 【E】配置化精确返回值 Hook（MethodRuleHook）——按 MethodRuleHook.RULES
+        //     里“类.方法 -> 返回值”精确改写；规则为空则静默跳过。仅自有/授权 App 自测。
+        try {
+            MethodRuleHook.hook(cl, lpparam.packageName);
+        } catch (Throwable t) {
+            XposedBridge.log("[URule] 挂载失败: " + t);
+        }
+
+        // 【F】全 VIP/PRO 自动盲扫通道（AutoVipProHook）——按方法名强词表自动发现并
+        //     改写会员判定 getter。默认 LOG_ONLY=true 只观测打 [UAuto]，不改值。
+        //     确认无误伤后置 AutoVipProHook.LOG_ONLY=false 重建做真实注入。仅自有/授权自测。
+        try {
+            AutoVipProHook.hook(cl, lpparam.packageName);
+        } catch (Throwable t) {
+            XposedBridge.log("[UAuto] 挂载失败: " + t);
         }
 
         // 探测目标进程是否真的用了 Google Play Billing SDK
