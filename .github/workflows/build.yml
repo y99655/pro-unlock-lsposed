@@ -22,24 +22,17 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Install SDK platform & build-tools
-        env:
-          ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
         run: |
           yes | sdkmanager --licenses
           sdkmanager "platforms;android-34" "build-tools;34.0.0"
 
-      - name: Set up Gradle
+      - name: Build debug APK (auto debug-signed)
         uses: gradle/gradle-build-action@v3
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
         with:
           gradle-version: '8.2'
-
-      - name: Generate Gradle wrapper
-        run: gradle wrapper --gradle-version 8.2
-
-      - name: Build debug APK (auto debug-signed)
-        run: |
-          chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
+          arguments: assembleDebug --no-daemon
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
