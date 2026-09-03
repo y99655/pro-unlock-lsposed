@@ -24,12 +24,17 @@ field public final d:Z        <- 另一个布尔位
 - 构造签名 `(Z, 枚举, long, Z)V` 在 1.3.0 / 1.3.1 / 1.3.2 中**稳定一致**，
   但混淆后的**类名会变**（q5/o0 只是 1.3.2 的样子）。
 
-因此本模块（v3）的策略是：挂钩 `ClassLoader.loadClass`，每当 `com.mobilecad.app`
-加载一个类，就用标准反射检查其构造签名是否为 `(Z, Enum, long, Z)`，
-命中即对其构造器挂钩，在 `beforeHook` 里强制 `args[0] = true`。
+因此本模块（v4）的策略：
+1. **dex 直接枚举**（主）：拿目标 app 的 classloader，反射 `pathList.dexElements[i].dexFile.mCookie`
+   调 `DexFile.getClassNameList(cookie)`，一次性拿到全部应用类名（不依赖懒加载时机），
+   逐个 `Class.forName` 后检查构造签名是否为 `(Z, Enum, long, Z)`，命中即挂钩其构造器、
+   `beforeHook` 强制 `args[0] = true`（激活位）。
+2. **loadClass 钩 + 多时间点重扫**（兜底）：覆盖动态/分包晚加载的类；1.5s/4s/9s 三轮汇总。
+3. 对命中类追加**钩返回 boolean 的 getter（如 a()Z）强制返回 true**，双保险。
 **不写死任何类名**，所以跨版本、跨混淆都通杀。
-（v2 曾用 `DexFile.getClassNameList` 反射枚举类，该方法在 Android 10+ 已失效，
-导致扫描到 0 个类、挂钩 0 个——此问题在 v3 已彻底改用 loadClass 方案修复。）
+（v2/v3 曾用 `DexFile.getClassNameList` 反射 + `loadClass` 钩，在 Android 10+ 上
+因拿不到 cookie / 懒加载时延导致实测只扫到 1 个类、挂钩 0 个 —— 本版改为
+**正确读取 mCookie 后直接枚举**修复，实测应能扫到应用全部业务类。）
 
 > 兜底：仅当应用确实含 `BillingClient`（Google Play 购买型）才尝试回灌已购记录
 > （`BillingHook`）；国内版不含该类的直接跳过，不再打印 ClassNotFoundException 噪音。
