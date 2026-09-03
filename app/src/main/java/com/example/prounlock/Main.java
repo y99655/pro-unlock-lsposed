@@ -30,8 +30,14 @@ public class Main implements IXposedHookLoadPackage, IXposedHookZygoteInit {
         // 兜底：仅当目标为 Google Play 版（真正含 BillingClient）才尝试回灌已购记录，
         // 否则直接跳过，避免无谓的 ClassNotFoundException 噪音
         try {
-            if (XposedHelpers.findClassIfExists("com.android.billingclient.api.BillingClient",
-                    lpparam.classLoader) != null) {
+            boolean hasBilling;
+            try {
+                Class.forName("com.android.billingclient.api.BillingClient", false, lpparam.classLoader);
+                hasBilling = true;
+            } catch (ClassNotFoundException e) {
+                hasBilling = false;
+            }
+            if (hasBilling) {
                 BillingHook.hook(lpparam.classLoader);
             } else {
                 XposedBridge.log("[ProUnlock] 未检测到 BillingClient（国内版正常），跳过计费兜底");
