@@ -37,21 +37,28 @@ import de.robv.android.xposed.XposedBridge;
  *   Google Play Billing 通道由 UniversalBillingHook 单独覆盖，本类专注 SP 主战场。
  *
  * ============================================================================
- * 【观测学习】闭环（v4 新增，用户需求：“搜他VIP记录类别/日期 -> 记录到DATA -> 按记录匹配hook”）：
+ * 【观测学习】闭环（v5：只观测第一次；用户需求：“搜他VIP记录类别/日期 -> 记录到DATA -> 按记录匹配hook”）
  *
  *   光靠“拍脑袋词表”总会漏掉某 App 特有的 key（如混淆后的 a_b_c、或自造的 vip_token）。
- *   本类在运行时额外做三层自学习：
+ *   本类在运行时做“一次性”三层自学习（每个 App 只完整跑一次，之后只回灌不重扫）：
  *
- *   L1 磁盘扫描(scanSharedPrefs)：目标 App 第一次读 SP 时（scanGate，任意读取即触发），
+ *   L1 磁盘扫描(scanSharedPrefs)：目标 App 第一次读 SP 时（scanGate 触发），
  *       在后台线程扫一次它自己 /data/data/&lt;pkg&gt;/shared_prefs/*.xml，
  *       把所有“名字像会员 / 值像 epoch 时间戳 / 名字含会员词且值像日期”的条目抓出来，
- *       写入该 App 的 /data/data/&lt;pkg&gt;/files/uvip/records.txt，
- *       并把“确实存在的会员/日期 key”记入内存规则表 -> 后续读这些 key 即使词表没
+ *       写入该 App 的 /data/data/&lt;pkg&gt;/files/uvip/hkrecords.txt，
+ *       并把“确实存在的会员/日期 key”记入规则表 -> 后续读这些 key 即使词表没
  *       覆盖也能命中（真正扩大了匹配面，包括混淆 key）。
- *   L2 运行读取观测(note)：每次命中注入时，把 key/方法/判定形态 追加记录到
- *       /data/data/&lt;pkg&gt;/files/uvip/hits.log。
+ *   L2 运行读取观测(note)：每次命中注入时，把 key/方法/判定形态 记入内存规则；
+ *       仅在首次学习窗口内（hkrules.txt 未生成）追加到 hkhits.log。
  *   L3 规则回灌(learnedHit/isDateKey)：读 key 时先查内存规则表；若该 key 已确认为
  *       会员/日期形态则直接命中并按形态注入，不再只依赖词表启发式。
+ *
+ *   【只观测第一次】(v5 性能收敛)：观测文件固定名为
+ *       hkrules.txt / hkrecords.txt / hkhits.log（每个 App 相同）。
+ *     扫描前先检查 hkrules.txt 是否已存在：已存在 -> 说明首次学习已完成，
+ *       只 loadPersistedRules 把规则读进内存回灌，跳过重扫/重写；
+ *       不存在 -> 才执行首次三段式闭环并落盘。这样只有第一次观测有磁盘扫描
+ *       开销，后续启动零 XML 扫描、零规则重写，避免性能影响与卡顿。
  *
  *   写入位置诚实说明：
  *     观测发生在“目标 App 自己的进程”，同 uid 下可写自己沙箱，因此统一写到
@@ -159,6 +166,18 @@ public class UniversalVipSweeper {
     // ==================================================================
     /** 观测开关：false 则完全不写文件（仅内存去重日志），便于关掉写盘副作用。 */
     private static final boolean ENABLE_LEARN = true;
+
+    /** 观测记录统一固定文件名（写进被观测 App 自己的 /files/uvip/ 目录）。
+     *  存在性即“是否已完成首次学习”的哨兵：三个文件任一已存在就不重复跑
+     *  三段式「观测-学习-回灌」，避免每次启动都重扫 SP 造成性能开销/卡顿。 */
+    private static final String FN_RULES   = "hkrules.txt";    // 学习规则 (KEY<TAB>shape) -> 启动热加载回灌
+    private static final String FN_RECORDS = "hkrecords.txt";  // 首次磁盘扫描出的会员/日期 key + 值 + 形态
+    private static final String FN_HITS    = "hkhits.log";     // 运行命中观测(仅首次学习窗口内追加)
+
+    /** 被观测 App 自己的观测目录。 */
+    private static File uvipDir(String pkg) {
+        return new File("/data/data/" + pkg + "/files/uvip");
+    }
 
     /** 每个进程只做一次磁盘扫描（key: pkg）。 */
     private static final Set<String> scannedPkg = java.util.Collections.synchronizedSet(new HashSet<String>());
@@ -458,9 +477,11 @@ public class UniversalVipSweeper {
 
     /**
      * 进程“开始读 SP”时无条件调用（不限命中）：
-     * 安排一次后台任务：先从磁盘加载该包已持久化的学习规则（跨重启热加载），
-     * 再扫一次 shared_prefs —— 以便在词表命中【之前】就发现它独有的会员/日期 key。
-     * 这是“搜他VIP记录、按记录匹配hook”不依赖词表的关键。
+     * 安排一次后台任务：
+     *   1) 总是先把该包已持久化的学习规则(hkrules.txt)热加载进内存 -> 回灌直接用；
+     *   2) 只有当 hkrules.txt【不存在】(即还没做过首次观测) 时才扫 shared_prefs 并写记录；
+     *      若已存在 -> 跳过重扫/重写，避免每次启动重复扫描 XML 造成性能开销与卡顿。
+     * 这正是“只观测第一次”的关键：首次跑完三段式闭环后，后续启动只读规则回灌。
      */
     private static void scanGate() {
         if (!ENABLE_LEARN) return;
@@ -469,12 +490,18 @@ public class UniversalVipSweeper {
             final String pkg = currentPkg();
             if (pkg == null || "?".equals(pkg)) return;
             scanScheduled = true;                  // 之后所有读取直接短路
-            if (scannedPkg.add(pkg)) {             // 每个包只扫一次
+            if (scannedPkg.add(pkg)) {             // 每个包只处理一次
                 Thread t = new Thread(new Runnable() {
                     @Override public void run() {
                         try {
-                            loadPersistedRules(pkg);
-                            scanSharedPrefs(pkg);
+                            loadPersistedRules(pkg);          // 有规则就回灌（无条件，很轻）
+                            File rf = new File(uvipDir(pkg), FN_RULES);
+                            if (rf.isFile()) {
+                                // 已完成过首次观测 -> 不再重复三段式闭环
+                                XposedBridge.log(TAG + " @ " + pkg + " 观测文件已存在, 跳过重扫(直接规则回灌)");
+                                return;
+                            }
+                            scanSharedPrefs(pkg);             // 首次观测：扫 + 写 hkrecords/hkrules
                         } catch (Throwable ignore) {}
                     }
                 }, "uvip-scan");
@@ -486,12 +513,12 @@ public class UniversalVipSweeper {
     }
 
     /**
-     * 从 /data/data/&lt;pkg&gt;/files/uvip/rules.txt 热加载上次学习到的规则
+     * 从 /data/data/&lt;pkg&gt;/files/uvip/hkrules.txt 热加载上次学习到的规则
      * （格式每行：KEY&lt;TAB&gt;shape）。使规则在进程重启后仍生效，无需再次运行才学会。
      */
     private static void loadPersistedRules(String pkg) {
         try {
-            File f = new File("/data/data/" + pkg + "/files/uvip/rules.txt");
+            File f = new File(uvipDir(pkg), FN_RULES);
             if (!f.isFile()) return;
             BufferedReader r = new BufferedReader(new InputStreamReader(new FileInputStream(f), "UTF-8"));
             String line;
@@ -566,10 +593,11 @@ public class UniversalVipSweeper {
             }
             sb.append("\n");
         }
-        // 落盘 records + 持久化规则 rules.txt（下次进程启动 loadPersistedRules 读回）
+        // 落盘 hkrecords.txt + 持久化规则 hkrules.txt（下次进程启动 loadPersistedRules 读回；
+        // 存在 hkrules.txt 即视为“已首次观测”，之后不再重扫）
         if (hitCount > 0 || ENABLE_LEARN) {
-            File outDir = new File("/data/data/" + pkg + "/files/uvip");
-            writeAppend(new File(outDir, "records.txt"), sb.toString());
+            File outDir = uvipDir(pkg);
+            writeAppend(new File(outDir, FN_RECORDS), sb.toString());
             StringBuilder rules = new StringBuilder("# UVip 学习规则 @ ").append(pkg)
                     .append(" (KEY\\tshape; 可手工增删) \n");
             synchronized (learnedRule) {
@@ -581,11 +609,11 @@ public class UniversalVipSweeper {
                     }
                 }
             }
-            writeAppend(new File(outDir, "rules.txt"), rules.toString());
+            writeAppend(new File(outDir, FN_RULES), rules.toString());
         }
         if (hitCount > 0) {
             XposedBridge.log(TAG + " 磁盘扫描 @ " + pkg + " 发现 " + hitCount
-                    + " 个会员/日期 key(已入学习规则)");
+                    + " 个会员/日期 key(已入学习规则, 首次观测完成)");
         }
     }
 
@@ -620,7 +648,9 @@ public class UniversalVipSweeper {
         return false;
     }
 
-    /** 运行时命中观测：把 pkg/key/方法/形态 追加到该 App 的 uvip.log（进程内去重）。 */
+    /** 运行时命中观测：把 key/方法/形态 记入内存规则（保证本进程命中）；仅当
+     *  尚未生成 hkrules.txt（即首次学习窗口内）才追加 hkhits.log —— 已学过则
+     *  不再写盘，符合“只观测第一次”。 */
     private static void note(String key, String method, String shape) {
         if (!ENABLE_LEARN) return;
         try {
@@ -628,13 +658,17 @@ public class UniversalVipSweeper {
             if (pkg == null || "?".equals(pkg)) return;
             String sig = pkg + "\u0001" + key + "\u0001" + method;
             if (!notedSig.add(sig)) return;
-            // 该 key 已被词表/运行命中 -> 确认其为会员字段，进入学习规则（若尚无更精确形态）
+            // 该 key 已被词表/运行命中 -> 确认其为会员字段，进入内存规则（若尚无更精确形态）
             String rule = learnedRule.get(pkg + "\u0001" + key);
             if (rule == null) {
                 learnedRule.put(pkg + "\u0001" + key, shape);
             }
-            File f = new File("/data/data/" + pkg + "/files/uvip/hits.log");
-            appendLine(f, key + "\t" + method + "\t" + shape);
+            // 只写 hkhits.log：文件已存在说明首次学习已完成，跳过（避免反复写盘）
+            File rf = new File(uvipDir(pkg), FN_RULES);
+            if (!rf.isFile()) {
+                File f = new File(uvipDir(pkg), FN_HITS);
+                appendLine(f, key + "\t" + method + "\t" + shape);
+            }
         } catch (Throwable ignore) {
         }
     }
