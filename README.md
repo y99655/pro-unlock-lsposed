@@ -30,7 +30,10 @@ field public final d:Z        <- 另一个布尔位
    逐个 `Class.forName` 后检查构造签名是否为 `(Z, Enum, long, Z)`，命中即挂钩其构造器、
    `beforeHook` 强制 `args[0] = true`（激活位）。
 2. **loadClass 钩 + 多时间点重扫**（兜底）：覆盖动态/分包晚加载的类；1.5s/4s/9s 三轮汇总。
-3. 对命中类追加**钩返回 boolean 的 getter（如 a()Z）强制返回 true**，双保险。
+3. 命中类后，钩其**无参 boolean getter（如 a()Z）强制返回 true**。
+⚠️ 只在**精确命中 `(Z,Enum,J,Z)` 构造器**的类上做——绝不宽泛地把任何
+"含 bool+enum+long 字段"的类(如几何类 EArc)的 boolean 全改 true，
+否则会破坏 App 功能（v4 曾误伤导致几何异常，v4.1 已改为仅精确匹配+仅无参 getter）。
 **不写死任何类名**，所以跨版本、跨混淆都通杀。
 （v2/v3 曾用 `DexFile.getClassNameList` 反射 + `loadClass` 钩，在 Android 10+ 上
 因拿不到 cookie / 懒加载时延导致实测只扫到 1 个类、挂钩 0 个 —— 本版改为
