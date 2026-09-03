@@ -19,30 +19,44 @@
 拦截 `BillingClient.queryPurchasesAsync` 阻断真实网络查询、直接回调"已购"，
 同时拦截 `launchBillingFlow` 视为已购。
 
-## 【B】自动 VIP 拦截（核心新能力）
+## 【B】全兼容自动 VIP 拦截（核心新能力）
 
-**目标：自动搜索 App 里控制 VIP/PRO/会员/解锁的状态并自动按类型赋值。**
+**目标：把我所知道的 VIP/会员/PRO/解锁判定方式尽量全兼容；凡是“到期/有效期”读取，
+一律让 App 认为已续费到 2099-01-01。**
 
 原理：付费态大多持久化在 `SharedPreferences`。它虽是系统 SDK 类、**永不混淆**，
-且 App 调用的 `getXxx` 方法名**本身就决定了返回类型** → 类型判断天然成立：
+且 App 调用的 `getXxx` 方法名**本身就决定了返回类型** → 类型判断天然成立。
+命中判定 = key 名转小写后匹配**多套语义关键词**，而不是单一列表：
 
-| App 调用的方法 | 返回类型 | 命中后自动注入 |
+| 语义 | 代表关键词（截取） | 命中后的意图 |
 |---|---|---|
-| `getBoolean("xxx", false)` | 布尔 | `true` |
-| `getInt("xxx", 0)` | 整数 | `1`（多数判 `>0` 即解锁） |
-| `getFloat(...)` | 小数 | `1.0` |
-| `getLong("xxx_expire", 0)` | 到期时间戳 | 距今 +30 年（恒为"未过期"） |
-| `getString("xxx", null)` | 字符串 | `"premium"` |
-| `getStringSet(...)` | 字符串集合 | `{premium, vip, pro}` |
+| 付费/会员/已购 | `vip premium paid purchase license entitlement member gold` | 判“已付费” |
+| 升级档位/PRO | `pro_ _pro is_pro plus_ deluxe ultimate` | 判“高级版” |
+| 解锁功能 | `unlock full_version registered full_access` | 判“已解锁” |
+| 去广告 | `remove_ads no_ads ad_free adblock disable_ads` | 判“广告已去除” |
+| 到期/有效期 | `expire expiry deadline valid_until end_time purchase_date` | 判“未过期”→ **回 2099-01-01** |
 
-**命中判定** = key 名转小写后含付费关键词：`vip / premium / paid / unlock /
-unlocked / license / licence / entitle / member / subscrib / subscription /
-gold / activate / activated / pro_`；裸 `pro` 另走"排除误伤词"逻辑
-（profile / progress / prompt / product… 不会误伤）。关键词与注入值都在
-`UniversalVipSweeper` 顶部**常量数组，可自行增删调参**。
+裸 `pro`（profile / progress / product …会误伤）单独走排除表，见 `PRO_FALSE_POSITIVES`。
+
+**注入矩阵（关键：日期统一 2099-01-01）：**
+
+| App 调用的方法 | 返回类型 | 命中后注入 |
+|---|---|---|
+| `getBoolean("is_vip")` | 布尔 | `true` |
+| `getLong("vip_expire")` | 到期时间戳 | **2099-01-01**（毫秒 4070908800000，恒“未过期”） |
+| `getInt("is_paid")` | 整数 | `1`（判 `>0` 即解锁） |
+| `getInt("remaining_days")` | 到期/剩余类 int | `99999`（当作“剩余超多”，恒未过期） |
+| `getFloat(...)` | 小数 | `1.0` |
+| `getString("membership")` | 档位字符串 | `"premium"`；默认值已是 true/1/yes/on 则保留 |
+| `getString("vip_expire")` | 日期字符串 | `"2099-01-01"`；默认值是毫秒/秒 epoch 则回 `4070908800000`/`4070908800` |
+| `getStringSet("permissions")` | 集合 | `{premium, vip, pro}` |
+
+> 日期统一规则（你硬性要求）：SP 里到期可能存毫秒 Long、秒 Long、或字符串
+> `"yyyy-MM-dd"`/epoch 三种形态，拦截器分别回灌对应的 2099 形态，让
+> `now < expire` 的“未过期”判断恒成立。
 
 **挂载点**：`Main.initZygote()` 系统级挂一次 → 对所有进程生效，与是否加载
-Billing SDK 无关（正好补上【A】"国内非 Billing App" 的空档）。
+Billing SDK 无关（正好补上【A】“国内非 Billing App” 的空档）。
 
 ### 【B】的边界（务必知悉）
 

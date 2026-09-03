@@ -14,12 +14,13 @@ import de.robv.android.xposed.IXposedHookZygoteInit.StartupParam;
  *   Billing SDK 的 App 才有意义：存在 BillingClient -> 挂载通用 Billing Hook；
  *   否则静默跳过。
  *
- * 【B】自动 VIP 拦截（UniversalVipSweeper，任意 App 通用）
+ * 【B】全兼容自动 VIP 拦截（UniversalVipSweeper，任意 App 通用）
  *   在 initZygote() 系统级挂载一次：拦截 android.app.SharedPreferencesImpl 的
- *   getString/getBoolean/getInt/getLong/getFloat/getStringSet，当 key 名命中
- *   vip/premium/unlock 等关键词时，按被调 getXxx 的返回类型自动塞解锁值。
- *   该功能与 Billing 无关 —— 对“把付费态存本地 SP、本地判断即解锁”的任意 App
- *   都尝试生效（包括不带 Billing SDK 的国内 App）。
+ *   getString/getBoolean/getInt/getLong/getFloat/getStringSet。key 命中多套语义
+ *   （付费/会员/PRO/解锁/去广告/到期）时按 getXxx 返回类型自动塞解锁值，
+ *   其中“到期/有效期”类读取一律回 2099-01-01，令“未过期”判断恒成立。
+ *   与 Billing 无关 —— 对“把付费态存本地 SP、本地判断即解锁”的任意 App
+ *   （含不带 Billing SDK 的国内 App）都尝试生效。
  *
  * 用法：LSPosed 作用域勾选目标 App（VIP 拦截因是 zygote 级，勾“系统框架”
  * 即可对全部 App 生效），重启后看日志 [UBilling] / [UVip]。
