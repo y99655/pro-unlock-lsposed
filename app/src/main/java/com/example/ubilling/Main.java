@@ -26,8 +26,14 @@ import de.robv.android.xposed.IXposedHookZygoteInit.StartupParam;
  *   不含词表关键词也能命中），并把观测记录写到 /data/data/&lt;该App&gt;/files/uvip/
  *   （records.txt / hits.log），供查看与人工调参。
  *
+ * 【C】选定 App 精确激活增强（ProActivator，白名单 com.mobilecad.app）
+ *   对把 PRO 位存在【内存对象】(不经 SP) 的 App（如指尖3D 的 EntitlementState，
+ *   构造器 (Z,Enum,J,Z) 首参=pro）做 dex 级精确构造器钩强制激活。
+ *   仅在 handleLoadPackage 命中白名单包名时启用 —— 这是 UVip(SP) 与
+ *   UBilling(Billing) 覆盖不到的“内部状态”通道。
+ *
  * 用法：LSPosed 作用域勾选目标 App（VIP 拦截因是 zygote 级，勾“系统框架”
- * 即可对全部 App 生效），重启后看日志 [UBilling] / [UVip]。
+ * 即可对全部 App 生效），重启后看日志 [UBilling] / [UVip] / [UPro]。
  */
 public class Main implements IXposedHookLoadPackage, IXposedHookZygoteInit {
 
@@ -42,6 +48,18 @@ public class Main implements IXposedHookLoadPackage, IXposedHookZygoteInit {
         }
         final ClassLoader cl = lpparam.classLoader;
         if (cl == null) return;
+
+        // 【C】选定 App 精确激活增强：仅对 com.mobilecad.app（指尖3D）生效 ——
+        //     它的 PRO 位是内存对象 EntitlementState(构造器 (Z,Enum,J,Z) 首参=pro)，
+        //     不经 SharedPreferences（故 UVip 管不到），需 dex 级精确构造器钩。
+        //     白名单限定，绝不对任意 App 生效，避免 EArc 式误伤。
+        if (ProActivator.TARGET_PKG.equals(lpparam.packageName)) {
+            try {
+                ProActivator.hook(cl);
+            } catch (Throwable t) {
+                XposedBridge.log("[UPro] 挂载失败: " + t);
+            }
+        }
 
         // 探测目标进程是否真的用了 Google Play Billing SDK
         boolean hasBilling;

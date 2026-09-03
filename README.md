@@ -4,6 +4,7 @@
 
 - **【A】Google Play Billing 通用解锁** —— 针对接入 Google Play Billing SDK 的 App；
 - **【B】自动 VIP 拦截（SharedPreferences 方案）** —— 针对把会员/PRO/去广告状态存本地 `SharedPreferences` 的 App（**不要求走 Google 付费**，国内 App 也覆盖）。
+- **【C】选定 App 精确激活增强（ProActivator，白名单）** —— 针对把 PRO 位存【内存对象】、不经 SP 的 App（如指尖3D `com.mobilecad.app` 的 `EntitlementState`，构造器 `(Z,Enum,J,Z)` 首参=pro），做 dex 级精确构造器钩强制激活。仅白名单包名生效，不对任意 App 盲扫，避免误伤。
 
 与 `lsposed_pro_unlock`（只针对 `com.mobilecad.app` 的专版）不同，本模块**无包名白名单**。
 
@@ -113,6 +114,7 @@ Billing SDK 无关（正好补上【A】“国内非 Billing App” 的空档）
 4. 排查日志：
    - `[UBilling]` → Billing 回灌是否触发、探测到哪些 SKU；
    - `[UVip]` → 命中了哪些 SP key、自动赋了什么值。
+   - `[UPro]` → (仅 com.mobilecad.app) PRO 构造器是否被精确挂钩激活。
 
 ## 构建（GitHub Actions）
 
@@ -123,8 +125,9 @@ Billing SDK 无关（正好补上【A】“国内非 Billing App” 的空档）
 
 ```
 app/src/main/java/com/example/ubilling/
-├── Main.java                  # 入口：探测 Billing SDK；initZygote 挂载 UVip
+├── Main.java                  # 入口：Billing 探测 + 白名单 ProActivator；initZygote 挂载 UVip
 ├── UniversalBillingHook.java  # 【A】通用 Billing hook（回灌已购 + 探测 SKU）
 ├── UniversalVipSweeper.java   # 【B】自动 VIP 拦截 + 观测学习闭环（SP + 词表 + 类型自适应 + 规则回灌）
+├── ProActivator.java          # 【C】选定 App(com.mobilecad.app) dex 精确构造器激活
 └── MainActivity.java          # 占位 UI
 ```
