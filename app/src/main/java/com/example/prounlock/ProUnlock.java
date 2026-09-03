@@ -15,25 +15,20 @@ import de.robv.android.xposed.XposedHelpers;
 /**
  * 真正的"通杀"解锁点。
  *
- * PRO 激活状态保存在应用内部数据对象里（如 1.3.2 的 q5/o0），
- * 构造签名 (Z, 枚举, long, Z)V，激活布尔位【a:Z】由第一个布尔参数写入，
- * 且该字段 final、构造后不可变。只要在构造时把第一个布尔参数强制为 true 即可解锁，
- * 与计费 / 服务端无关 → 真通杀。
+ * PRO 激活状态保存在应用内部数据对象里（如 1.3.2 的 q5/o0）：
+ *   构造签名 (Z, Enum, long, Z)V，激活布尔位【a:Z】由第一个布尔参数写入，
+ *   且字段 final、构造后不可变。构造时把第一个布尔参数强制为 true 即可解锁。
  *
- * 扫描方案（v3，修复 Android 10+ 失效问题）：
- *   挂钩 ClassLoader.loadClass，每当 com.mobilecad.app 加载一个类，
- *   用标准反射检查其构造签名。命中即挂钩构造器、beforeHook 强制 args[0]=true。
+ * 关键：该 App 经 R8/ProGuard 混淆后，**几乎全部业务类都在混淆包(a0..z/q5等)里**，
+ * com.mobilecad.app 包内只剩 MainActivity 等极少入口。因此不能按包名前缀过滤，
+ * 必须扫描 classloader 加载的【所有类】（签名 (Z,Enum,long,Z) 足够独特，不会误伤系统类）。
  *
- * v3.2 新增诊断：
- *   - 命中后打印 "挂钩 PRO 构造器: ..."（每命中一次）
- *   - 若某类具备 PRO 形态(boolean+enum+long 字段)但构造签名未精确匹配，
- *     打印 "候选未匹配" 以便回报表中真实签名
- *   - 启动约 8 秒后打印一次汇总：已扫描类数 / 已挂钩数（即使为 0 也有结论）
+ * 扫描方案：挂钩 ClassLoader.loadClass，每加载一个非系统应用类就用标准反射检查构造签名。
+ * 命中即挂钩构造器、beforeHook 强制 args[0]=true。
  */
 public class ProUnlock {
 
     private static final String TAG = "[ProUnlock]";
-    private static final String PKG_PREFIX = "com.mobilecad.app";
 
     private static final Set<String> scanned = new HashSet<>();
     private static final ThreadLocal<Boolean> inScan = ThreadLocal.withInitial(() -> Boolean.FALSE);
@@ -52,9 +47,15 @@ public class ProUnlock {
                             if (inScan.get()) return;
                             Class<?> c = (Class<?>) param.getResult();
                             if (c == null) return;
-                            String name = c.getName();
-                            if (!name.startsWith(PKG_PREFIX)) return;
-                            if (!scanned.add(name)) return;
+                            if (!scanned.add(c.getName())) return;
+                            // 跳过明显的外部类（android/java/javax/kotlin/com.google/androidx）
+                            String n = c.getName();
+                            if (n.startsWith("android.") || n.startsWith("androidx.")
+                                    || n.startsWith("java.") || n.startsWith("javax.")
+                                    || n.startsWith("kotlin.") || n.startsWith("com.google.")
+                                    || n.startsWith("com.android.")) {
+                                return;
+                            }
                             inScan.set(Boolean.TRUE);
                             try {
                                 scannedCount++;
@@ -65,7 +66,7 @@ public class ProUnlock {
                             }
                         }
                     });
-            XposedBridge.log(TAG + " loadClass 扫描器已挂载（扫描 " + PKG_PREFIX + " 全部加载类）");
+            XposedBridge.log(TAG + " loadClass 扫描器已挂载（扫描全部应用类，不再限定 com.mobilecad.app）");
             scheduleSummary();
         } catch (Throwable t) {
             XposedBridge.log(TAG + " loadClass hook 失败: " + t);
@@ -81,7 +82,7 @@ public class ProUnlock {
                 public void run() {
                     XposedBridge.log(String.format(
                             "%s 扫描汇总：已扫描 %d 个类，命中挂钩 %d 个，候选未匹配 %d 个"
-                                    + "（挂钩>0 即生效；若=0 请把下方\"候选未匹配\"的签名回报）",
+                                    + "（挂钩>0 即生效；若=0 请把\"候选未匹配\"的真实签名回报）",
                             TAG, scannedCount, hookedCount, candidateCount));
                 }
             }, 8000L);
