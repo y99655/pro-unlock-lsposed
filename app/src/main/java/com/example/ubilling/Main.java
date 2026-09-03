@@ -7,17 +7,22 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
 import de.robv.android.xposed.IXposedHookZygoteInit.StartupParam;
 
 /**
- * 通用 Google Play Billing 解锁模块入口。
+ * 通用 Billing 解锁 + 自动 VIP 拦截 模块入口。
  *
- * 不做任何包名白名单 —— 对系统里任意 App 进程都尝试挂载。因为只有真正
- * 加载了 Google Play Billing SDK 的应用才有意义，所以我们先探测是否存在
- * BillingClient 类：
- *   - 存在  -> 挂载通用 Billing Hook；
- *   - 不存在 -> 绝大多数普通 App / 国内 App，静默跳过（不打日志刷屏）。
+ * 【A】Google Play Billing 解锁（针对加载了 Billing SDK 的 App）
+ *   不做任何包名白名单 —— 对系统里任意 App 进程都尝试挂载。只有真正加载了
+ *   Billing SDK 的 App 才有意义：存在 BillingClient -> 挂载通用 Billing Hook；
+ *   否则静默跳过。
  *
- * 用法：在 LSPosed 的“作用域”里勾选希望作用的 App（一般可勾“系统框架”或
- * 逐个勾选目标 App），重启后该 App 内任何 queryPurchasesAsync 都会被回灌
- * “已购”结果。
+ * 【B】自动 VIP 拦截（UniversalVipSweeper，任意 App 通用）
+ *   在 initZygote() 系统级挂载一次：拦截 android.app.SharedPreferencesImpl 的
+ *   getString/getBoolean/getInt/getLong/getFloat/getStringSet，当 key 名命中
+ *   vip/premium/unlock 等关键词时，按被调 getXxx 的返回类型自动塞解锁值。
+ *   该功能与 Billing 无关 —— 对“把付费态存本地 SP、本地判断即解锁”的任意 App
+ *   都尝试生效（包括不带 Billing SDK 的国内 App）。
+ *
+ * 用法：LSPosed 作用域勾选目标 App（VIP 拦截因是 zygote 级，勾“系统框架”
+ * 即可对全部 App 生效），重启后看日志 [UBilling] / [UVip]。
  */
 public class Main implements IXposedHookLoadPackage, IXposedHookZygoteInit {
 
@@ -54,6 +59,13 @@ public class Main implements IXposedHookLoadPackage, IXposedHookZygoteInit {
 
     @Override
     public void initZygote(StartupParam startupParam) {
-        // 无需 zygote 级初始化
+        // 系统级自动 VIP 拦截：zygote 期挂一次，对所有进程生效。
+        // 它 hook 的是 Android SDK 类 SharedPreferencesImpl（永不混淆），
+        // 与目标 App 是否加载 Billing SDK 无关。
+        try {
+            UniversalVipSweeper.hook();
+        } catch (Throwable t) {
+            XposedBridge.log("[UVip] 挂载失败: " + t);
+        }
     }
 }
