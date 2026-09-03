@@ -1,105 +1,115 @@
 package com.example.prounlock;
 
 import java.lang.reflect.Constructor;
-import java.lang.reflect.Field;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.HashSet;
+import java.util.Set;
 
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 
 /**
- * 真正的"通杀"解锁点（替代原先基于 Google Play Billing 的错误假设）。
+ * 真正的"通杀"解锁点。
  *
  * 经对指尖3D / Digit3D (com.mobilecad.app) 各版本 smali 逆向确认：
  *   PRO 激活状态保存在应用内部的一个数据对象里（如 1.3.2 的 q5/o0），
- *   其结构为：
- *     field public final a:Z        <- 激活布尔位（PRO 是否激活）
- *     field public final b:L<枚举>; <- 档位枚举（standard / pro ...）
- *     field public final c:J        <- long（到期时间等）
- *     field public final d:Z        <- 另一个布尔位
- *   构造签名固定为 (Z, 枚举, long, Z)V，且 a 由【第一个布尔参数】写入。
- *   该字段是 final，构造后不可变，因此只要在构造时把第一个布尔参数强制为 true，
- *   应用后续读取到的永远是"已激活"，与服务端 / 计费无关 → 这才是真正的通杀。
+ *   构造签名固定为 (Z, 枚举, long, Z)V，且激活布尔位【a:Z】由第一个布尔参数写入。
+ *   该字段是 final，构造后不可变；只要在构造时把第一个布尔参数强制为 true，
+ *   应用后续读取到的永远是"已激活"，与计费 / 服务端无关 → 真正的通杀。
  *
- * 为避免写死混淆后的类名（q5/o0 随版本变化），本模块在运行时扫描
- * com.mobilecad.app 包下所有类，找出"构造签名恰为 (Z, Enum, long, Z) 且类含
- * boolean / enum / long 字段"的类，对其构造器挂钩，在 beforeHook 里强制 args[0]=true。
+ * 旧方案用 DexFile.getClassNameList 反射枚举类，该方法在 Android 10+ 已失效，
+ * 导致扫描到 0 个类、挂钩 0 个。现改为：挂钩 ClassLoader.loadClass，
+ * 每当应用加载一个 com.mobilecad.app 的类就用标准反射检查其构造签名，
+ * 命中即挂钩构造器、在 beforeHook 强制 args[0]=true。
+ * 由于"挂钩"发生在 loadClass 返回之后、new 执行之前，即便是首次实例化也已生效。
  */
 public class ProUnlock {
 
+    private static final String TAG = "[ProUnlock]";
     private static final String PKG_PREFIX = "com.mobilecad.app";
-    private static boolean scanned = false;
 
-    public static void hook(ClassLoader cl) {
-        if (scanned) return;
-        scanned = true;
+    // 已扫描类名，避免重复扫描
+    private static final Set<String> scanned = new HashSet<>();
+    // 防止 getParameterTypes() 触发类加载时递归进入本 hook
+    private static final ThreadLocal<Boolean> inScan = ThreadLocal.withInitial(() -> Boolean.FALSE);
+
+    private static int hookedCount = 0;
+    private static int scannedCount = 0;
+
+    public static void hook() {
         try {
-            List<String> classes = listDexClasses(cl);
-            int hooked = 0;
-            for (String cn : classes) {
-                if (cn == null || !cn.startsWith(PKG_PREFIX)) continue;
-                try {
-                    Class<?> c = Class.forName(cn, false, cl);
-                    if (c.isInterface() || c.isAnnotation() || c.isEnum() || c.isPrimitive()) continue;
-                    if (!hasProShape(c)) continue;
-                    for (Constructor<?> ctor : c.getDeclaredConstructors()) {
-                        Class<?>[] ps = ctor.getParameterTypes();
-                        if (ps.length == 4
-                                && ps[0] == boolean.class
-                                && ps[1].isEnum()
-                                && ps[2] == long.class
-                                && ps[3] == boolean.class) {
-                            XposedBridge.hookMethod(ctor, new XC_MethodHook() {
-                                @Override
-                                protected void beforeHookedMethod(MethodHookParam param) {
-                                    param.args[0] = Boolean.TRUE;
-                                }
-                            });
-                            hooked++;
-                            XposedBridge.log("[ProUnlock] 挂钩 PRO 构造器: " + c.getName());
+            XposedHelpers.findAndHookMethod(ClassLoader.class, "loadClass", String.class, boolean.class,
+                    new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            // 递归保护：避免检查参数类型时触发的类加载再次进入扫描
+                            if (inScan.get()) return;
+                            Class<?> c = (Class<?>) param.getResult();
+                            if (c == null) return;
+                            String name = c.getName();
+                            if (!name.startsWith(PKG_PREFIX)) return;
+                            if (!scanned.add(name)) return;
+                            inScan.set(Boolean.TRUE);
+                            try {
+                                scannedCount++;
+                                tryScan(c);
+                            } catch (Throwable ignore) {
+                                // 单个类解析失败，跳过
+                            } finally {
+                                inScan.set(Boolean.FALSE);
+                            }
                         }
-                    }
-                } catch (Throwable ignore) {
-                    // 个别类无法加载 / 解析，跳过
-                }
-            }
-            XposedBridge.log("[ProUnlock] PRO 构造器扫描完成，共挂钩 " + hooked
-                    + " 个（若为 0 说明未匹配到，请回报机型/版本）");
+                    });
+            XposedBridge.log(TAG + " loadClass 扫描器已挂载（扫描 com.mobilecad.app 全部加载类）");
         } catch (Throwable t) {
-            XposedBridge.log("[ProUnlock] 扫描异常: " + t);
+            XposedBridge.log(TAG + " loadClass hook 失败: " + t);
         }
     }
 
-    /** 二次过滤：类必须同时拥有 boolean 字段、enum 字段、long 字段（与 PRO 对象结构吻合）。 */
-    private static boolean hasProShape(Class<?> c) {
-        boolean b = false, e = false, l = false;
-        for (Field f : c.getDeclaredFields()) {
-            Class<?> t = f.getType();
-            if (t == boolean.class) b = true;
-            else if (t.isEnum()) e = true;
-            else if (t == long.class) l = true;
+    /** 检查某类的构造签名是否为 (Z, Enum, J, Z)，命中则挂钩。 */
+    private static void tryScan(Class<?> c) {
+        if (c.isInterface() || c.isAnnotation() || c.isEnum() || c.isPrimitive()) return;
+        // 仅当类确实含有 boolean 字段时才值得检查构造器，减少开销
+        boolean hasBoolField = false;
+        for (java.lang.reflect.Field f : c.getDeclaredFields()) {
+            if (f.getType() == boolean.class) { hasBoolField = true; break; }
         }
-        return b && e && l;
+        if (!hasBoolField) return;
+
+        for (Constructor<?> ctor : c.getDeclaredConstructors()) {
+            Class<?>[] p = ctor.getParameterTypes();
+            if (p.length != 4) continue;
+            if (p[0] != boolean.class) continue;
+            if (p[1].isEnum()) continue;            // 第 2 个必须是枚举档位
+            if (p[2] != long.class) continue;       // 第 3 个必须是 long
+            if (p[3] != boolean.class) continue;     // 第 4 个必须是 boolean
+            hookConstructor(c, ctor, p[1].getName());
+        }
     }
 
-    /** 列举该 classloader 所有 dex 内的类名。 */
-    private static List<String> listDexClasses(ClassLoader cl) {
-        List<String> out = new ArrayList<>();
+    private static void hookConstructor(Class<?> c, Constructor<?> ctor, String enumName) {
         try {
-            Object pathList = XposedHelpers.getObjectField(cl, "pathList");
-            Object[] elements = (Object[]) XposedHelpers.getObjectField(pathList, "dexElements");
-            for (Object el : elements) {
-                Object dexFile = XposedHelpers.getObjectField(el, "dexFile");
-                if (dexFile == null) continue;
-                String[] names = (String[]) XposedHelpers.callMethod(dexFile, "getClassNameList");
-                if (names == null) continue;
-                for (String n : names) out.add(n);
-            }
+            XposedBridge.hookMethod(ctor, new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) {
+                    if (param.args != null && param.args.length > 0) {
+                        param.args[0] = Boolean.TRUE; // 强制第一个布尔参数 = 激活位 = true
+                    }
+                }
+            });
+            hookedCount++;
+            XposedBridge.log(String.format(
+                    "%s 挂钩 PRO 构造器: %s  档位枚举=%s  累计挂钩=%d",
+                    TAG, c.getName(), enumName, hookedCount));
         } catch (Throwable t) {
-            XposedBridge.log("[ProUnlock] 列举 dex 类失败: " + t);
+            XposedBridge.log(TAG + " 挂钩失败 " + c.getName() + ": " + t);
         }
-        return out;
+    }
+
+    /** 应用首次实例化完成后打印统计（由 Main 在延迟任务里调用一次即可，这里留作备用）。 */
+    public static void reportStats() {
+        XposedBridge.log(String.format(
+                "%s 扫描完成：已扫描 %d 个类，共挂钩 %d 个 PRO 构造器（若为 0 说明未匹配，请回报机型/版本）",
+                TAG, scannedCount, hookedCount));
     }
 }
