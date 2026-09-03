@@ -229,6 +229,10 @@ public class UniversalVipSweeper {
         // 业务时间戳护栏：last_app_modify_date 等即使被词表/旧规则命中也整体放行，
         // 绝不对其注入日期或 premium(真机反馈: DCloud 防二次打包字段曾被误注 2099)。
         if (hasAny(rawKey.toLowerCase(), BIZ_TIMESTAMP)) return false;
+        // SDK 基础设施护栏：HttpDns/广告/统计/初始化标志等 key 含 expire/activate/cpm 等
+        // 易误判词，但本质与用户会员态无关，整体放行(真机反馈: cpm_expire_time/
+        // sdk_activate_init/http_dns_refetch_on_expire 曾被误注)。此栏须在词表命中前。
+        if (hasAny(rawKey.toLowerCase(), SDK_INFRA)) return false;
         // 先查学习规则：若该 key 已被确认是会员/日期形态，直接命中（无需词表覆盖）
         if (learnedHit(rawKey)) return true;
         String k = rawKey.toLowerCase();
@@ -256,6 +260,8 @@ public class UniversalVipSweeper {
         if (rawKey == null) return false;
         String k = rawKey.toLowerCase();
         if (hasAny(k, BIZ_TIMESTAMP)) return false;
+        // SDK 基础设施(key 名带 http_dns/cpm_/sdk_activate 等)绝不当“会员到期”注入
+        if (hasAny(k, SDK_INFRA)) return false;
         if (hasAny(k, DATE_KEYWORDS)) return true;
         // 学习规则里该 key 若被判定为 date 形态，也视为日期键（需词佐证）
         String pkg = currentPkg();
@@ -272,6 +278,31 @@ public class UniversalVipSweeper {
         "build_date", "build_time", "version_date", "install_time", "install_date",
         "first_launch", "create_time", "created_at", "created_date", "register_time",
         "launch_time", "app_modify"
+    };
+
+    /** SDK 基础设施护栏：命中则整体放行(绝不注入)。这些是【任意 App 都会有的网络/广告/
+     *  统计/加速 SDK 的通用缓存 key】，如 HttpDns、移动网络加速、广告 SDK 的 token 刷新、
+     *  SDK 初始化标志等。它们名里常含 expire/activate/cpm 等易被词表误判为“会员到期/激活”
+     *  的词，但本质是【基础设施状态，与用户会员付费态无关】。命中即放行，
+     *  避免 UVip 把注入火力全打在无关 SDK 字段上、掩盖真正的会员 key(真机反馈项:
+     *  cpm_expire_time / max_expire_time / use_http_dns_refetch_on_expire /
+     *  sdk_activate_init 均被误注过)。 */
+    private static final String[] SDK_INFRA = {
+        // HttpDns / 移动网络加速(腾讯云 XG/阿里/自建)
+        "http_dns", "httpdns", "dns_refetch", "refetch_on_expire", "dnspod",
+        // 网络/连接 自身配置(非业务网络状态)
+        "cpm_", "cpmexpire", "max_expire_time", "network_optim", "netopt",
+        // 各类 SDK 初始化/版本/自检标志(非会员激活)
+        "sdk_activate", "sdk_init", "sdk_init_state", "_init_flag", "init_flag",
+        "first_init", "sdk_ver", "sdk_version", "framework_",
+        // 广告/上报 SDK 内部状态(穿山甲/优量汇/友盟等)
+        "advert_init", "ads_sdk", "ad_sdk_state", "report_", "upload_state",
+        "push_state", "xg_push", "umeng_", "bugly_", "sentry_",
+        // 埋点/分析/多进程/开关类 SDK 基建(非会员)
+        "cache_ana", "ana_switch", "expire_switch", "support_multi",
+        "multi_process", "process_support",
+        // 一般性 SDK token/刷新/心跳(非会员 token)
+        "sdk_token", "refresh_token_sdk", "heartbeat", "keepalive", "session_refresh"
     };
 
     /** 日期提示词：学习规则把某 key 标为 date 后，仍需这些词佐证才算日期键(防误伤)。 */
