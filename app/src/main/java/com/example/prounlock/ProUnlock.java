@@ -2,6 +2,8 @@ package com.example.prounlock;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.util.HashSet;
 import java.util.Set;
 
@@ -81,14 +83,34 @@ public class ProUnlock {
                 @Override
                 public void run() {
                     XposedBridge.log(String.format(
-                            "%s 扫描汇总：已扫描 %d 个类，命中挂钩 %d 个，候选未匹配 %d 个"
-                                    + "（挂钩>0 即生效；若=0 请把\"候选未匹配\"的真实签名回报）",
+                            "%s 扫描汇总：已扫描 %d 个类，命中挂钩 %d 个，候选(PRO形态) %d 个"
+                                    + "（挂钩>0 即生效；若=0 请把上方的\"候选(PRO形态)\"行回报）",
                             TAG, scannedCount, hookedCount, candidateCount));
                 }
-            }, 8000L);
+            }, 3000L);
         } catch (Throwable t) {
             XposedBridge.log(TAG + " 汇总调度失败(可忽略): " + t);
         }
+    }
+
+    /**
+     * 打印"具备 PRO 形态"的类（字段含 boolean + enum + long 且构造含 boolean/long 参数）。
+     * 这类就是 PRO 对象（如 q5/o0）。只要出现这一行，就说明扫描已能定位到它，
+     * 若此时仍未挂钩，日志里的真实构造签名即可用来精确适配。
+     */
+    private static void logProShape(Class<?> c, boolean hasEnumF, boolean hasLong) {
+        if (candidateCount >= 15) return;
+        if (!loggedCandidate.add(c.getName())) return;
+        candidateCount++;
+        StringBuilder ct = new StringBuilder();
+        for (Constructor<?> ctor : c.getDeclaredConstructors()) {
+            ct.append(" (");
+            Class<?>[] p = ctor.getParameterTypes();
+            for (int i = 0; i < p.length; i++) ct.append(i == 0 ? "" : ", ").append(shortName(p[i]));
+            ct.append(")V");
+        }
+        XposedBridge.log(String.format("%s 候选(PRO形态): %s  enum字段=%b long字段=%b 构造器:%s",
+                TAG, c.getName(), hasEnumF, hasLong, ct));
     }
 
     private static void tryScan(Class<?> c) {
@@ -116,23 +138,38 @@ public class ProUnlock {
                 matched = true;
             }
         }
-        // 诊断：具备 PRO 形态(boolean+enum+long 字段)但未精确匹配 -> 记录真实构造签名
-        if (!matched && hasEnumF && hasLong && candidateCount < 15) {
-            if (loggedCandidate.add(c.getName())) {
-                candidateCount++;
-                StringBuilder sb = new StringBuilder();
-                for (Constructor<?> ctor : c.getDeclaredConstructors()) {
-                    sb.append(" (");
-                    Class<?>[] p = ctor.getParameterTypes();
-                    for (int i = 0; i < p.length; i++) {
-                        sb.append(i == 0 ? "" : ", ").append(shortName(p[i]));
-                    }
-                    sb.append(")V");
+
+        // 只要类具备完整 PRO 形态(字段同时含 boolean+enum+long)就立刻打印，
+        // 便于确认扫描已定位到 PRO 对象；即使构造签名不同也能暴露真实签名。
+        if (hasEnumF && hasLong) {
+            logProShape(c, hasEnumF, hasLong);
+            // 兜底：同类的 boolean 无参/单参 getter（如 q5/o0.a()Z 返回激活位）也强制返回 true，
+            // 这样即使构造点没被拦到，应用每次“查询是否 PRO”都会被改写成 true。
+            hookBooleanGetters(c);
+        }
+    }
+
+    /** 钩住 PRO 形态类上所有返回 boolean 的访问方法，强制返回 true（构造拦不到的兜底）。 */
+    private static void hookBooleanGetters(Class<?> c) {
+        try {
+            for (Method m : c.getDeclaredMethods()) {
+                int mod = m.getModifiers();
+                if (m.getReturnType() != boolean.class) continue;
+                if (Modifier.isStatic(mod) || !Modifier.isPublic(mod)) continue;
+                if (m.getParameterTypes().length > 1) continue;
+                try {
+                    XposedBridge.hookMethod(m, new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            param.setResult(Boolean.TRUE);
+                        }
+                    });
+                    XposedBridge.log(TAG + "  兜底钩 getter: " + c.getName() + "." + m.getName() + "() -> true");
+                } catch (Throwable ignore) {
                 }
-                XposedBridge.log(String.format(
-                        "%s 候选未匹配: %s  字段[bool=%b,enum=%b,long=%b] 构造器:%s",
-                        TAG, c.getName(), hasBool, hasEnumF, hasLong, sb));
             }
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + " getter 钩失败 " + c.getName() + ": " + t);
         }
     }
 
