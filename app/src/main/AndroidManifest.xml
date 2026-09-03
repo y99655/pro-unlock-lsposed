@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application
+        android:allowBackup="true"
+        android:label="ProUnlock (LSPosed)"
+        android:icon="@android:drawable/ic_menu_manage">
+
+        <!-- LSPosed / Xposed 模块声明 -->
+        <meta-data
+            android:name="xposedmodule"
+            android:value="true" />
+        <meta-data
+            android:name="xposedminversion"
+            android:value="53" />
+        <meta-data
+            android:name="xposeddescription"
+            android:value="Universal PRO unlock for com.mobilecad.app via Play Billing hook (unlock_pro / unlock_pro_2)" />
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="ProUnlock">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

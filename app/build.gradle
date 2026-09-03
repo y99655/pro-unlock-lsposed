@@ -1,0 +1,30 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace "com.example.prounlock"
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.example.prounlock"
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    // 官方 Xposed API 已包含兼容 LSPosed 所需的接口，无需额外依赖
+}
+
+dependencies {
+    // Xposed / LSPosed 官方 API（仅编译期，不打包进最终模块）
+    compileOnly 'de.robv.android.xposed:api:82'
+    compileOnly 'de.robv.android.xposed:api:82:sources'
+}
