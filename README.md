@@ -9,7 +9,6 @@
 - **【E】配置化精确返回值 Hook（MethodRuleHook，授权自测用）** —— 人工配置 `类.方法 -> 返回值`，强制改写目标 App 里某个具名业务方法（如 `CommonUtil.getLingPaiZuanShi()` 这类会员判定）的返回，返回值按方法真实返回类型自动转换。规则为空即跳过。仅自有/授权 App 自测。
 - **【F】自动盲扫解锁（AutoVipProHook，授权自测用）** —— 遍历目标 App 里"类名含 vip/pro/premium/member" 的类与"方法名像会员判定"的方法，**按成员原有值类别**决定注入值（布尔解锁位→true、等级 int→高值、到期 long/日期→2099、档位 string→premium），默认 LOG_ONLY=先观测打 [UAuto] 清单、确认无误伤后再开注入。v16 起支持**按类名盲扫其字段**（含静态会员字段直接改写存储值）；v17 起支持**单例对象实例字段注入**（hook `getInstance()/get()/instance()` 等静态取实例方法，拿到会员单例后改写其会员实例字段）与**多 ClassLoader 深度枚举**（应用 loader + 非系统父链并集，覆盖分包/插件/壳延迟加载）。
 - **【G】SQLite/DB 会员盲扫（DBSweeperHook，授权自测用）** —— 覆盖"会员态存本地 SQLite/Room 表、判定时 SELECT 出来比"的 App。hook `SQLiteDatabase.rawQuery/query` 出口 + `AbstractCursor` 的 `getString/getInt/getLong`，按**列名语义**把"布尔会员位列→true/1、等级列→顶级档"的读取改写成开通态；到期列因秒/毫秒二义只观测不强注入。默认 LOG_ONLY=只打 [UDB] 观测。
-- **【H】时间冻结/拨回（TimeFreezeHook，授权自测用）** —— 覆盖"会员到期 = now > expireTs"这类**直接比较当前时间**的判定。hook `System.currentTimeMillis()`（Date/Calendar 亦基于它），把进程读到的当前时间整体回调 `PULLBACK_MS`，令"未过期"恒成立。默认 `PULLBACK_MS=0` 仅挂钩演示，设非 0 才真正拨回。仅自有/授权 App 自测。
 
 与 `lsposed_pro_unlock`（只针对 `com.mobilecad.app` 的专版）不同，本模块代码层面**无包名白名单**——
 但 **v14 起全部通道只作用于你在 LSPosed 作用域里勾选的 App**（借 LSPosed 的进程分发机制），
@@ -135,7 +134,7 @@
 | 【B】SP/VIP 对某个 App 生效 | 勾**那个 App**（不再需要系统框架） |
 | 【A】Billing 回灌对某个 App 生效 | 勾**那个 App** |
 | 【C】指尖3D 精确激活 | 勾 **com.mobilecad.app** |
-| 【D】【E】【F】【G】【H】对目标 App 生效 | 勾**那个 App** |
+| 【D】【E】【F】【G】对目标 App 生效 | 勾**那个 App** |
 
 > v14 起**不勾系统框架也正常**：UVip(SP) 走 handleLoadPackage 按进程触发，只操作你
 > 勾选的 App，绝不对未勾选应用 / 系统进程拦截 SharedPreferences。想解锁哪个 App，
@@ -172,7 +171,7 @@
 
 ```
 app/src/main/java/com/example/ubilling/
-├── Main.java                  # 入口：按作用域进程挂载 B/C/D/E/F/G/H + A(有 Billing SDK 时)
+├── Main.java                  # 入口：按作用域进程挂载 B/C/D/E/F/G + A(有 Billing SDK 时)
 ├── UniversalBillingHook.java  # 【A】通用 Billing hook（回灌已购 + 探测 SKU）
 ├── UniversalVipSweeper.java   # 【B】自动 VIP 拦截 + 观测学习闭环（SP + 词表 + 类型自适应 + 规则回灌）——只作用域勾选 App
 ├── ProActivator.java          # 【C】选定 App(com.mobilecad.app) dex 精确构造器激活
@@ -180,6 +179,5 @@ app/src/main/java/com/example/ubilling/
 ├── MethodRuleHook.java        # 【E】配置化精确返回值 Hook：类.方法 -> 返回值(按返回类型自动转换)
 ├── AutoVipProHook.java        # 【F】自动盲扫: 方法名/类名强词 + 字段按原值类别 + v17单例实例字段注入/多loader枚举
 ├── DBSweeperHook.java         # 【G】SQLite/DB 会员盲扫: hook query出口+Cursor读取, 按列名语义改写
-├── TimeFreezeHook.java        # 【H】时间冻结/拨回: hook System.currentTimeMillis 回调 PULLBACK_MS
 └── MainActivity.java          # 占位 UI
 ```

@@ -29,7 +29,7 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
  *   不再在 initZygote 期对全系统挂载 SP 钩子——否则会对【所有】进程（系统 app、
  *   其它应用、system_server 等）都拦截 SharedPreferences，既越权又造成误伤。
  *   现在 handleLoadPackage 只在“本模块作用域勾选的 App 及其子进程”被 LSPosed 调用，
- *   因此 B/C/D/E/F/G/H 通通只操作你勾选的 App，绝不动其它应用。
+ *   因此 B/C/D/E/F/G 通通只操作你勾选的 App，绝不动其它应用。
  *   副作用：若想对某 App 的 SP 型会员解锁，须把该 App 勾进作用域并重启生效。
  *
  * 【C】选定 App 精确激活增强（ProActivator，白名单 com.mobilecad.app）
@@ -65,15 +65,9 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
  *   按【列名语义】把“布尔会员位列/等级列”读取改写为开通态；到期列因秒/毫秒二义
  *   只观测不强注入。默认 LOG_ONLY=true 只打 [UDB] 观测。仅自有/授权 App 自测。
  *
- * 【H】时间冻结/拨回通道（TimeFreezeHook，仅授权自测）
- *   覆盖“会员到期 = now > expireTs”这类【直接比较当前时间】的判定。hook
- *   System.currentTimeMillis()(Date/Calendar 亦基于它)，把进程读到的当前时间整体
- *   回调 PULLBACK_MS，令“未过期”恒成立。默认 PULLBACK_MS=0 仅挂钩演示，需设非 0
- *   才真正拨回。仅自有/授权 App 自测。
- *
- * 用法：LSPosed 作用域勾选目标 App（B/C/D/E/F/G/H 全通道都只在勾选 App 的进程内
+ * 用法：LSPosed 作用域勾选目标 App（B/C/D/E/F/G 全通道都只在勾选 App 的进程内
  * 生效，不再对未勾选应用操作），软重启后看日志 [UVip] / [UBilling] / [UPro] / [UNet]
- * / [URule] / [UAuto] / [UDB] / [UTime]。
+ * / [URule] / [UAuto] / [UDB]。
  */
 public class Main implements IXposedHookLoadPackage {
 
@@ -146,14 +140,8 @@ public class Main implements IXposedHookLoadPackage {
             XposedBridge.log("[UAuto] 挂载失败: " + t);
         }
 
-        // 【H】时间冻结/拨回通道（TimeFreezeHook）——hook System.currentTimeMillis，
-        //     把进程读到的当前时间回调 PULLBACK_MS，令“now > expireTs”型到期判定恒未过期。
-        //     默认 PULLBACK_MS=0 仅挂钩演示；设非 0 才真正拨回。仅自有/授权自测。
-        try {
-            TimeFreezeHook.hook(cl, lpparam.packageName);
-        } catch (Throwable t) {
-            XposedBridge.log("[UTime] 挂载失败: " + t);
-        }
+        // 【H】通道已移除(v1.6)：TimeFreezeHook(时间冻结/拨回) 经评估不再需要，
+        //     避免对进程当前时间做全局回调带来的副作用。仅保留 G(DB盲扫)+F(自动盲扫)。
 
         // 探测目标进程是否真的用了 Google Play Billing SDK
         boolean hasBilling;
