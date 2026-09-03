@@ -29,14 +29,8 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
  *   不再在 initZygote 期对全系统挂载 SP 钩子——否则会对【所有】进程（系统 app、
  *   其它应用、system_server 等）都拦截 SharedPreferences，既越权又造成误伤。
  *   现在 handleLoadPackage 只在“本模块作用域勾选的 App 及其子进程”被 LSPosed 调用，
- *   因此 B/C/D/E/F/G 通通只操作你勾选的 App，绝不动其它应用。
+ *   因此 B/D/E/F/G 通通只操作你勾选的 App，绝不动其它应用。
  *   副作用：若想对某 App 的 SP 型会员解锁，须把该 App 勾进作用域并重启生效。
- *
- * 【C】选定 App 精确激活增强（ProActivator，白名单 com.mobilecad.app）
- *   对把 PRO 位存在【内存对象】(不经 SP) 的 App（如指尖3D 的 EntitlementState，
- *   构造器 (Z,Enum,J,Z) 首参=pro）做 dex 级精确构造器钩强制激活。
- *   仅在 handleLoadPackage 命中白名单包名时启用 —— 这是 UVip(SP) 与
- *   UBilling(Billing) 覆盖不到的“内部状态”通道。
  *
  * 【D】联网鉴权抗 HOOK 自测通道（NetLabHook，仅授权自测）
  *   模拟“破解方针对服务端/联网鉴权型 App”的攻击面：OkHttp 响应篡改(T1)、
@@ -65,8 +59,8 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
  *   按【列名语义】把“布尔会员位列/等级列”读取改写为开通态；到期列因秒/毫秒二义
  *   只观测不强注入。默认 LOG_ONLY=true 只打 [UDB] 观测。仅自有/授权 App 自测。
  *
- * 用法：LSPosed 作用域勾选目标 App（B/C/D/E/F/G 全通道都只在勾选 App 的进程内
- * 生效，不再对未勾选应用操作），软重启后看日志 [UVip] / [UBilling] / [UPro] / [UNet]
+ * 用法：LSPosed 作用域勾选目标 App（B/D/E/F/G 全通道都只在勾选 App 的进程内
+ * 生效，不再对未勾选应用操作），软重启后看日志 [UVip] / [UBilling] / [UNet]
  * / [URule] / [UAuto] / [UDB]。
  */
 public class Main implements IXposedHookLoadPackage {
@@ -94,17 +88,8 @@ public class Main implements IXposedHookLoadPackage {
             XposedBridge.log("[UVip] 挂载失败: " + t);
         }
 
-        // 【C】选定 App 精确激活增强：仅对 com.mobilecad.app（指尖3D）生效 ——
-        //     它的 PRO 位是内存对象 EntitlementState(构造器 (Z,Enum,J,Z) 首参=pro)，
-        //     不经 SharedPreferences（故 UVip 管不到），需 dex 级精确构造器钩。
-        //     白名单限定，绝不对任意 App 生效，避免 EArc 式误伤。
-        if (ProActivator.TARGET_PKG.equals(lpparam.packageName)) {
-            try {
-                ProActivator.hook(cl);
-            } catch (Throwable t) {
-                XposedBridge.log("[UPro] 挂载失败: " + t);
-            }
-        }
+        // 【C】通道已移除(v1.7)：ProActivator(指尖3D 专用精确激活) 定向白名单已不再需要，
+        //     后续只针对勾选 App 走通用通道。
 
         // 【D】联网鉴权抗 hook 自测通道（NetLabHook）——对每个勾选进程尝试；
         //     内部按“是否加载 okhttp3/WebView”自动决定挂哪些面，无对应类即静默跳过。

@@ -16,12 +16,12 @@ import de.robv.android.xposed.XposedHelpers;
  * 的方式强制改写任意 App 里某个具体方法的返回结果。
  *
  * ============================================================================
- * 为什么需要它（与 UVip/UBilling/ProActivator/NetLabHook 的分工）：
- *   前面四通道分别是“SP 关键词盲扫 / Billing 回灌 / 构造器激活位 / 网络与 JS”。
+ * 为什么需要它（与 UVip/UBilling/NetLabHook 等的分工）：
+ *   前面几通道分别是“SP 关键词盲扫 / Billing 回灌 / 网络与 JS”。
  *   但真实世界很多 App（如“我的”/cn.ms 一类）的会员判定是【具名业务方法】——
  *   例如 cn.ms.util.CommonUtil.getLingPaiZuanShi() 返回“是否已购灵派钻石”。
- *   这类判定不经 SharedPreferences、不走 Billing，也不带 (Z,Enum,J,Z) 构造器，
- *   四通道全部够不着。要覆盖它就必须【按调用方逆向出的“类.方法”精确 hook】。
+ *   这类判定不经 SharedPreferences、不走 Billing，也不带会员类构造器位，
+ *   上述通道都够不着。要覆盖它就必须【按调用方逆向出的“类.方法”精确 hook】。
  *
  *   本通道提供一个通用、可配置的能力：给定一条规则
  *      类名  -> 方法名(可按参数类型限定) -> 目标返回值(字符串表达)

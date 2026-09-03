@@ -4,7 +4,6 @@
 
 - **【A】Google Play Billing 通用解锁** —— 针对接入 Google Play Billing SDK 的 App；
 - **【B】自动 VIP 拦截（SharedPreferences 方案）** —— 针对把会员/PRO/去广告状态存本地 `SharedPreferences` 的 App（**不要求走 Google 付费**，国内 App 也覆盖）。
-- **【C】选定 App 精确激活增强（ProActivator，白名单）** —— 针对把 PRO 位存【内存对象】、不经 SP 的 App（如指尖3D `com.mobilecad.app` 的 `EntitlementState`，构造器 `(Z,Enum,J,Z)` 首参=pro），做 dex 级精确构造器钩强制激活。仅白名单包名生效，不对任意 App 盲扫，避免误伤。
 - **【D】联网鉴权抗 HOOK 自测（NetLabHook，授权自测用）** —— 模拟针对服务端/联网鉴权型 App 的攻击面：OkHttp 响应篡改(T1)、SSL pinning 探测(T2)、WebView JS 注入/调用记录(T3)。默认 LOG_ONLY=只观测不改写；填规则关 LOG_ONLY 重建后测自己 App 能否被打穿。请勿用于破解他人服务。
 - **【E】配置化精确返回值 Hook（MethodRuleHook，授权自测用）** —— 人工配置 `类.方法 -> 返回值`，强制改写目标 App 里某个具名业务方法（如 `CommonUtil.getLingPaiZuanShi()` 这类会员判定）的返回，返回值按方法真实返回类型自动转换。规则为空即跳过。仅自有/授权 App 自测。
 - **【F】自动盲扫解锁（AutoVipProHook，授权自测用）** —— 遍历目标 App 里"类名含 vip/pro/premium/member" 的类与"方法名像会员判定"的方法，**按成员原有值类别**决定注入值（布尔解锁位→true、等级 int→高值、到期 long/日期→2099、档位 string→premium），默认 LOG_ONLY=先观测打 [UAuto] 清单、确认无误伤后再开注入。v16 起支持**按类名盲扫其字段**（含静态会员字段直接改写存储值）；v17 起支持**单例对象实例字段注入**（hook `getInstance()/get()/instance()` 等静态取实例方法，拿到会员单例后改写其会员实例字段）与**多 ClassLoader 深度枚举**（应用 loader + 非系统父链并集，覆盖分包/插件/壳延迟加载）。
@@ -124,7 +123,6 @@
 4. 排查日志：
    - `[UBilling]` → Billing 回灌是否触发、探测到哪些 SKU；
    - `[UVip]` → 命中了哪些 SP key、自动赋了什么值。
-   - `[UPro]` → (仅 com.mobilecad.app) PRO 构造器是否被精确挂钩激活。
    - `[UNet]` → (联网自测) 是否命中 OkHttp 响应面 / SSL pinning / WebView JS 调用。
 
 ### 作用域速查（v14 起全部通道都只作用域勾选的 App）
@@ -133,7 +131,6 @@
 |---|---|
 | 【B】SP/VIP 对某个 App 生效 | 勾**那个 App**（不再需要系统框架） |
 | 【A】Billing 回灌对某个 App 生效 | 勾**那个 App** |
-| 【C】指尖3D 精确激活 | 勾 **com.mobilecad.app** |
 | 【D】【E】【F】【G】对目标 App 生效 | 勾**那个 App** |
 
 > v14 起**不勾系统框架也正常**：UVip(SP) 走 handleLoadPackage 按进程触发，只操作你
@@ -142,7 +139,7 @@
 
 ### 联网型 App 怎么自测抗 hook（【D】NetLabHook）
 
-服务端/联网鉴权型 App（如 DCloud/H5 + 云函数发卡）不属于【A】【B】【C】解锁范围，
+服务端/联网鉴权型 App（如 DCloud/H5 + 云函数发卡）不属于【A】【B】等解锁范围，
 但若要验证“自己的 App 防不防得住 hook”，勾选它后看 `[UNet]` 日志：
 
 | 日志 | 含义 | 说明你的 App |
@@ -171,10 +168,9 @@
 
 ```
 app/src/main/java/com/example/ubilling/
-├── Main.java                  # 入口：按作用域进程挂载 B/C/D/E/F/G + A(有 Billing SDK 时)
+├── Main.java                  # 入口：按作用域进程挂载 B/D/E/F/G + A(有 Billing SDK 时)
 ├── UniversalBillingHook.java  # 【A】通用 Billing hook（回灌已购 + 探测 SKU）
 ├── UniversalVipSweeper.java   # 【B】自动 VIP 拦截 + 观测学习闭环（SP + 词表 + 类型自适应 + 规则回灌）——只作用域勾选 App
-├── ProActivator.java          # 【C】选定 App(com.mobilecad.app) dex 精确构造器激活
 ├── NetLabHook.java            # 【D】联网抗hook自测: 响应篡改/pinning探测/WebView JS面
 ├── MethodRuleHook.java        # 【E】配置化精确返回值 Hook：类.方法 -> 返回值(按返回类型自动转换)
 ├── AutoVipProHook.java        # 【F】自动盲扫: 方法名/类名强词 + 字段按原值类别 + v17单例实例字段注入/多loader枚举

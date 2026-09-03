@@ -24,7 +24,7 @@ import de.robv.android.xposed.XposedHelpers;
  * ============================================================================
  * 与既有通道的分工（为何需要它）：
  *   【B】UVip       扫 SharedPreferences 的 getXxx + key 关键词 —— 只覆盖 SP 型。
- *   【C】ProActivator 死锁一个白名单包 + 精确 (Z,Enum,J,Z) 构造器 —— 不通用。
+ *   （C. ProActivator 定向精确激活已于 v1.7 移除）
  *   【D】NetLabHook 网络/WebView 观测 —— 服务端/联网型。
  *   【E】MethodRuleHook 人工配置 类.方法->返回值 —— 需逐条逆向后手填，做不到开箱即用。
  *   但真实世界大量“会员判定”就是【一个普通 getter】：MyApp.isVip()、UserInfo.isPro()、
