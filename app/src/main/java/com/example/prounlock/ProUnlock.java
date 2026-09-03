@@ -46,6 +46,44 @@ public class ProUnlock {
     private static int scannedCount = 0;
     private static int candidateCount = 0;
 
+    private static volatile List<String> cachedDexNames = null;
+
+    /**
+     * 公开给其它模块（NavTabCleaner 等）复用的 dex 类名枚举，带缓存。
+     * 返回应用全部类名（含 android.* 等系统类，调用方自行过滤）。
+     */
+    public static List<String> dexClassNames(ClassLoader cl) {
+        if (cachedDexNames != null) return cachedDexNames;
+        synchronized (ProUnlock.class) {
+            if (cachedDexNames != null) return cachedDexNames;
+            List<String> out = new ArrayList<>();
+            try {
+                Object pathList = XposedHelpers.getObjectField(cl, "pathList");
+                Object[] dexElements = (Object[]) XposedHelpers.getObjectField(pathList, "dexElements");
+                if (dexElements != null) {
+                    Class<?> dexFileClass = Class.forName("dalvik.system.DexFile");
+                    Method getClassNameList = dexFileClass.getDeclaredMethod("getClassNameList", Object.class);
+                    getClassNameList.setAccessible(true);
+                    for (Object element : dexElements) {
+                        try {
+                            Object dexFile = XposedHelpers.getObjectField(element, "dexFile");
+                            if (dexFile == null) continue;
+                            Object cookie = XposedHelpers.getObjectField(dexFile, "mCookie");
+                            if (cookie == null) continue;
+                            String[] names = (String[]) getClassNameList.invoke(dexFile, cookie);
+                            if (names != null) for (String nm : names) out.add(nm);
+                        } catch (Throwable ignore) {
+                        }
+                    }
+                }
+            } catch (Throwable t) {
+                XposedBridge.log(TAG + " dex 类名枚举异常: " + t);
+            }
+            cachedDexNames = out;
+            return out;
+        }
+    }
+
     public static void hook(final ClassLoader appLoader) {
         // 1) dex 直接枚举：反射 pathList.dexElements[].dexFile.mCookie + getClassNameList
         try {
@@ -89,24 +127,7 @@ public class ProUnlock {
     private static void enumerateDex(ClassLoader cl) {
         int seen = 0;
         try {
-            Object pathList = XposedHelpers.getObjectField(cl, "pathList");
-            Object[] dexElements = (Object[]) XposedHelpers.getObjectField(pathList, "dexElements");
-            if (dexElements == null) return;
-            Class<?> dexFileClass = Class.forName("dalvik.system.DexFile");
-            Method getClassNameList = dexFileClass.getDeclaredMethod("getClassNameList", Object.class);
-            getClassNameList.setAccessible(true);
-            List<String> all = new ArrayList<>();
-            for (Object element : dexElements) {
-                try {
-                    Object dexFile = XposedHelpers.getObjectField(element, "dexFile");
-                    if (dexFile == null) continue;
-                    Object cookie = XposedHelpers.getObjectField(dexFile, "mCookie");
-                    if (cookie == null) continue;
-                    String[] names = (String[]) getClassNameList.invoke(dexFile, cookie);
-                    if (names != null) for (String nm : names) all.add(nm);
-                } catch (Throwable ignore) {
-                }
-            }
+            List<String> all = dexClassNames(cl);
             for (String nm : all) {
                 if (isSystem(nm)) continue;
                 if (!scanned.add(nm)) continue;

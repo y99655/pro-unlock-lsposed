@@ -27,6 +27,12 @@ public class Main implements IXposedHookLoadPackage, IXposedHookZygoteInit {
         } catch (Throwable t) {
             XposedBridge.log("[ProUnlock] ProUnlock 挂钩失败: " + t);
         }
+        // 去除底部「我的」Tab（版本无关：按 nav_mine_short 内容判定，MainActivity.onCreate 前执行）
+        try {
+            NavTabCleaner.hook(lpparam.classLoader);
+        } catch (Throwable t) {
+            XposedBridge.log("[ProUnlock] NavTabCleaner 挂钩失败(可忽略): " + t);
+        }
         // 兜底：仅当目标为 Google Play 版（真正含 BillingClient）才尝试回灌已购记录，
         // 否则直接跳过，避免无谓的 ClassNotFoundException 噪音
         try {
