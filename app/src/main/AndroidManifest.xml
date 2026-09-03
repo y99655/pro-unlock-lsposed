@@ -19,7 +19,7 @@
             android:value="true" />
         <meta-data
             android:name="xposeddescription"
-            android:value="kill vip: VIP/PRO解锁(每通道可勾选开关)+去广告+广告护栏 v1.12 仅作用域勾选App生效" />
+            android:value="kill vip: VIP/PRO解锁(每通道可勾选开关)+去广告(防闪退)+广告护栏 v1.13 仅作用域勾选App生效" />
 
         <activity
             android:name=".MainActivity"

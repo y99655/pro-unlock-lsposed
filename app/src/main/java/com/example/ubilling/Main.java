@@ -69,10 +69,14 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
  * 【I】第三方广告 SDK 去广告通道（AdBlockHook）
  *   用户希望“判断出广告类、直接关闭广告”（第三方广告 SDK 型：AdMob/穿山甲/优量汇/
  *   百青藤等）。这类 SDK 类名固定、公开可枚举，故用 L1【包名前缀白名单】精确判断
- *   （不看类名猜，零误伤）。整类屏蔽：hook 应用 ClassLoader.loadClass，命中广告前缀
- *   即抛 ClassNotFoundException —— 广告 SDK 的类永远加载不起来、不出广告。
- *   默认 ADBLOCK_ON=true 启用；AdBlockHook.LOG_ONLY=true 可切观测(只打 [UAd] 不拦)。
- *   只拦明确列出的广告包名，不碰同厂统计/推送/崩溃 SDK。仅自有/授权 App 自测。
+ *   （不看类名猜，零误伤）。hook 应用 ClassLoader.loadClass，命中广告前缀做处理。
+ *   默认 ADBLOCK_ON=true 启用；只拦明确列出的广告包名，不碰统计/推送/崩溃 SDK。
+ *
+ *   ★v1.13 修复闪退：旧版“命中即抛 ClassNotFoundException 整类屏蔽”会让【硬引用】
+ *   广告 SDK 且无 try/catch 保护的 App 闪退。故 v1.13 起默认 HARD_BLOCK=false：
+ *   loadClass 命中广告前缀【放行 + [UAd] 观测】，类照常加载、绝不闪退；
+ *   仅当确认目标 App 的广告 SDK 是懒加载/反射/带保护时才可置 HARD_BLOCK=true
+ *   恢复整类屏蔽(最强去广告)。详见 AdBlockHook 头注释。
  *
  * ============================================================================
  * v1.12 新增：
@@ -85,7 +89,7 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
  *   2) 【广告护栏 AdGuard】—— 防止 VIP 注入把广告激活：B/F/G 在注入前判定候选是否
  *      属广告服务控制上下文(广告SDK类/广告开关类SP key/方法/列)，是则跳过注入并打
  *      [UAdGuard] 观测日志，便于用户实测是哪个通道把哪个广告相关东西判成了会员。
- *      与去广告通道 I(AdBlockHook 整类屏蔽)互补。
+ *      与去广告通道 I(AdBlockHook)互补。
  *
  * 用法：LSPosed 作用域勾选目标 App（各通道是否生效 = 作用域勾选 ∧ MainActivity 里该通道
  * 打勾；都只在勾选 App 的进程内生效）。日志 [UVip]/[UBilling]/[UNet]/[URule]/[UAuto]/
@@ -186,9 +190,10 @@ public class Main implements IXposedHookLoadPackage {
             }
         }
 
-        // 【I】第三方广告 SDK 去广告通道（AdBlockHook）——按广告 SDK 包名前缀白名单整类
-        //     屏蔽其类加载(loadClass 命中即抛 CNFE, 广告不出)。默认 ADBLOCK_ON=true 启用；
-        //     LOG_ONLY=true 可切观测。仅自有/授权 App 自测。
+        // 【I】第三方广告 SDK 去广告通道（AdBlockHook）——按广告 SDK 包名前缀白名单处理
+        //     其类加载。v1.13 默认 HARD_BLOCK=false：命中放行 + [UAd] 观测(防硬引用闪退)；
+        //     确认目标广告 SDK 非硬引用时 AdBlockHook.HARD_BLOCK=true 才整类屏蔽(强去广告)。
+        //     ADBLOCK_ON=true 启用；仅自有/授权 App 自测。
         //     v1.12：MainActivity 不打勾(I/去广告)则整个去广告通道不挂载。
         if (onAdBlock) {
             try {

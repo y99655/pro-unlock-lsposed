@@ -46,7 +46,7 @@ public class MainActivity extends Activity {
             {"ch_db",         "【G】SQLite/DB 会员盲扫 (DB)",
                     "hook SQLite 读取出口，按列名语义改写会员列（默认仅观测）。"},
             {"ch_adblock",    "【I】第三方广告 SDK 去广告 (AdBlock)",
-                    "屏蔽主流广告 SDK 类加载（AdMob/穿山甲/优量汇/百青藤等），让其不出广告。"},
+                    "v1.13 默认放行广告类防闪退(仅观测[UAd])；确需强屏蔽请改 HARD_BLOCK=true。"},
     };
 
     private LinearLayout root;
