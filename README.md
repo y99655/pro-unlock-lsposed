@@ -24,13 +24,15 @@ field public final d:Z        <- 另一个布尔位
 - 构造签名 `(Z, 枚举, long, Z)V` 在 1.3.0 / 1.3.1 / 1.3.2 中**稳定一致**，
   但混淆后的**类名会变**（q5/o0 只是 1.3.2 的样子）。
 
-因此本模块（v2）的策略是：在运行时**扫描 `com.mobilecad.app` 包下所有类**，
-找出"构造签名为 `(Z, Enum, long, Z)` 且类含 boolean/enum/long 字段"的类，
-对其构造器挂钩，在 `beforeHook` 里强制 `args[0] = true`。
+因此本模块（v3）的策略是：挂钩 `ClassLoader.loadClass`，每当 `com.mobilecad.app`
+加载一个类，就用标准反射检查其构造签名是否为 `(Z, Enum, long, Z)`，
+命中即对其构造器挂钩，在 `beforeHook` 里强制 `args[0] = true`。
 **不写死任何类名**，所以跨版本、跨混淆都通杀。
+（v2 曾用 `DexFile.getClassNameList` 反射枚举类，该方法在 Android 10+ 已失效，
+导致扫描到 0 个类、挂钩 0 个——此问题在 v3 已彻底改用 loadClass 方案修复。）
 
-> 兜底：若某版本确实是 Google Play 购买型（走 `BillingClient`），模块仍会尝试回灌
-> 已购记录（`BillingHook`，对标准版是空操作、无害），双保险。
+> 兜底：仅当应用确实含 `BillingClient`（Google Play 购买型）才尝试回灌已购记录
+> （`BillingHook`）；国内版不含该类的直接跳过，不再打印 ClassNotFoundException 噪音。
 
 ## 编译（两种方式）
 
