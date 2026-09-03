@@ -167,32 +167,26 @@ public class ProUnlock {
         }
         if (!hasBool) return; // 连 boolean 字段都没有，不可能是 PRO 对象
 
-        boolean matched = false;
+        // 只在“精确命中 (Z, Enum, J, Z) 构造器”时挂钩，绝不碰其它 bool 字段/方法，
+        // 避免误伤 EArc 这类“恰好也含 bool+enum+long”的普通几何/业务类（曾导致功能损坏）。
         for (Constructor<?> ctor : c.getDeclaredConstructors()) {
             Class<?>[] p = ctor.getParameterTypes();
-            // 精确匹配： (Z, Enum, J, Z)  —— q5/o0 真身
             if (p.length == 4
                     && p[0] == boolean.class
                     && p[1].isEnum()
                     && p[2] == long.class
                     && p[3] == boolean.class) {
                 hookConstructor(c, ctor, p[1].getName());
-                matched = true;
+                // 仅对“同类的无参/单参 public boolean getter”(如 a()Z 返回激活位)强制 true，
+                // 且仅在构造器确实命中时做，避免波及无关类。
+                hookSingleBooleanGetter(c);
+                logProShape(c, "PRO构造器命中");
+                return; // 已经命中并挂钩，一个 PRO 类只需处理一次
             }
-        }
-
-        // 具备完整 PRO 形态(boolean+enum+long 字段)的类：打印真实签名 + 兜底钩 boolean getter
-        if (hasEnumF && hasLong) {
-            logProShape(c);
-            hookBooleanGetters(c);
-        }
-        // 即便形态不全（只有 boolean+long，无 enum 字段）也打印一条轻量线索，便于排错
-        else if (matched && !hasEnumF) {
-            logProShape(c);
         }
     }
 
-    private static void logProShape(Class<?> c) {
+    private static void logProShape(Class<?> c, String reason) {
         if (candidateCount >= 15) return;
         if (!loggedCandidate.add(c.getName())) return;
         candidateCount++;
@@ -203,18 +197,24 @@ public class ProUnlock {
             for (int i = 0; i < p.length; i++) ct.append(i == 0 ? "" : ", ").append(shortName(p[i]));
             ct.append(")V");
         }
-        XposedBridge.log(String.format("%s 候选(PRO形态): %s 构造器:%s",
-                TAG, c.getName(), ct));
+        XposedBridge.log(String.format("%s PRO对象: %s  匹配=%s  构造器:%s",
+                TAG, c.getName(), reason, ct));
     }
 
-    /** 钩住返回 boolean 的无参/单参 public 方法，强制返回 true（构造拦不到的兜底）。 */
-    private static void hookBooleanGetters(Class<?> c) {
+    /**
+     * 只对“已被精确匹配的 PRO 类”钩其无参/单参 public boolean getter（如 a()Z 返回激活位），
+     * 强制返回 true。此方法只在构造器精确命中后被调用，绝不对任意 bool+enum+long 类生效，
+     * 因此不会误伤 EArc 等几何类。
+     */
+    private static void hookSingleBooleanGetter(Class<?> c) {
         try {
             for (Method m : c.getDeclaredMethods()) {
                 int mod = m.getModifiers();
                 if (m.getReturnType() != boolean.class) continue;
                 if (Modifier.isStatic(mod) || !Modifier.isPublic(mod)) continue;
                 if (m.getParameterTypes().length > 1) continue;
+                // 只钩典型的无参 getter(a()Z)，带参数的一律跳过以免副作用
+                if (m.getParameterTypes().length != 0) continue;
                 try {
                     XposedBridge.hookMethod(m, new XC_MethodHook() {
                         @Override
@@ -222,7 +222,7 @@ public class ProUnlock {
                             param.setResult(Boolean.TRUE);
                         }
                     });
-                    XposedBridge.log(TAG + "  兜底钩 getter: " + c.getName() + "." + m.getName() + "() -> true");
+                    XposedBridge.log(TAG + "  钩 PRO getter: " + c.getName() + "." + m.getName() + "() -> true");
                 } catch (Throwable ignore) {
                 }
             }
