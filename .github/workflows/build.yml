@@ -1,8 +1,8 @@
-name: Build LSPosed Module
+name: Build Universal Billing Hook
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, universal-billing-hook ]
   workflow_dispatch:
 
 jobs:
@@ -37,5 +37,5 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ProUnlock-LSPosed-module
+          name: Universal-Billing-Hook
           path: app/build/outputs/apk/debug/app-debug.apk
