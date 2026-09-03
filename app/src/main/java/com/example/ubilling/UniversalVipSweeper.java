@@ -338,9 +338,15 @@ public class UniversalVipSweeper {
     }
 
     // ==================================================================
-    // ④ 入口：zygote 期调用一次，对全进程生效。
+    // ④ 入口：在目标进程内调用一次（v14 起由 handleLoadPackage 触发，
+    //    借 LSPosed 作用域让 SP 拦截只作用于被勾选的 App，不再全系统生效）。
     // ==================================================================
+    private static volatile boolean hookedFlag = false;
+
     public static void hook() {
+        // 同进程只挂一次，避免 handleLoadPackage 对同一进程重复触发导致双注入
+        if (hookedFlag) return;
+        hookedFlag = true;
         try {
             final Class<?> sp = Class.forName("android.app.SharedPreferencesImpl");
             hookBoolean(sp);
@@ -349,7 +355,7 @@ public class UniversalVipSweeper {
             hookLong(sp);
             hookString(sp);
             hookStringSet(sp);
-            XposedBridge.log(TAG + " 全兼容自动VIP已挂载(SP多语义 + 到期统一2099 + 观测学习)");
+            XposedBridge.log(TAG + " 全兼容自动VIP已挂载(SP多语义 + 到期统一2099 + 观测学习) @ " + currentPkg());
         } catch (Throwable t) {
             XposedBridge.log(TAG + " 挂载失败: " + t);
         }

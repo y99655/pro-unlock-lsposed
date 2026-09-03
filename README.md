@@ -7,7 +7,9 @@
 - **【C】选定 App 精确激活增强（ProActivator，白名单）** —— 针对把 PRO 位存【内存对象】、不经 SP 的 App（如指尖3D `com.mobilecad.app` 的 `EntitlementState`，构造器 `(Z,Enum,J,Z)` 首参=pro），做 dex 级精确构造器钩强制激活。仅白名单包名生效，不对任意 App 盲扫，避免误伤。
 - **【D】联网鉴权抗 HOOK 自测（NetLabHook，授权自测用）** —— 模拟针对服务端/联网鉴权型 App 的攻击面：OkHttp 响应篡改(T1)、SSL pinning 探测(T2)、WebView JS 注入/调用记录(T3)。默认 LOG_ONLY=只观测不改写；填规则关 LOG_ONLY 重建后测自己 App 能否被打穿。请勿用于破解他人服务。
 
-与 `lsposed_pro_unlock`（只针对 `com.mobilecad.app` 的专版）不同，本模块**无包名白名单**。
+与 `lsposed_pro_unlock`（只针对 `com.mobilecad.app` 的专版）不同，本模块代码层面**无包名白名单**——
+但 **v14 起全部通道只作用于你在 LSPosed 作用域里勾选的 App**（借 LSPosed 的进程分发机制），
+绝不对未勾选应用 / 系统进程做任何拦截或改写。
 
 ---
 
@@ -57,8 +59,12 @@
 > `"yyyy-MM-dd"`/epoch 三种形态，拦截器分别回灌对应的 2099 形态，让
 > `now < expire` 的“未过期”判断恒成立。
 
-**挂载点**：`Main.initZygote()` 系统级挂一次 → 对所有进程生效，与是否加载
-Billing SDK 无关（正好补上【A】“国内非 Billing App” 的空档）。
+**挂载点（v14 起，只针对作用域勾选 App）**：在 `handleLoadPackage()` 于**被勾选 App 的进程内**
+挂一次 SP 钩子 → **只拦截勾选 App 自己的 SharedPreferences**，绝不对其它应用/系统进程操作。
+与是否加载 Billing SDK 无关（正好补上【A】"国内非 Billing App" 的空档）。
+> ⚠️ v14 行为变更：此前 UVip 在 zygote 期挂载、对**全部进程**都拦截 SharedPreferences，
+> 会对未勾选应用产生越权与误伤。v14 起一律**只作用域勾选的 App**，想对哪个 App 的 SP
+> 型会员解锁，就把那个 App 勾进作用域并重启。
 
 ### 【B+】观测学习闭环（v5：只观测第一次，之后纯回灌不重扫）
 
@@ -81,7 +87,7 @@ Billing SDK 无关（正好补上【A】“国内非 Billing App” 的空档）
 这样只有第一次观测有扫描开销，后续启动零 XML 扫描、零规则重写，
 避免反复扫描造成的性能影响与卡顿。
 
-观测记录写到**被观测 App 自己**的目录（zygote 级观测跑在目标 App 进程内、
+观测记录写到**被观测 App 自己**的目录（观测跑在被勾选 App 自己的进程内、
 同 uid 才能写它自己的沙箱；写模块自己的目录会跨 uid 被拒）：
 
 ```
@@ -118,17 +124,18 @@ Billing SDK 无关（正好补上【A】“国内非 Billing App” 的空档）
    - `[UPro]` → (仅 com.mobilecad.app) PRO 构造器是否被精确挂钩激活。
    - `[UNet]` → (联网自测) 是否命中 OkHttp 响应面 / SSL pinning / WebView JS 调用。
 
-### 作用域速查（三通道 × 勾选）
+### 作用域速查（v14 起全部通道都只作用域勾选的 App）
 
 | 想要的效果 | 需要勾选 |
 |---|---|
-| 【B】SP/VIP 对**全部 App** 生效 | 「Android 系统」(系统框架) |
+| 【B】SP/VIP 对某个 App 生效 | 勾**那个 App**（不再需要系统框架） |
 | 【A】Billing 回灌对某个 App 生效 | 勾**那个 App** |
 | 【C】指尖3D 精确激活 | 勾 **com.mobilecad.app** |
+| 【D】【E】【F】对目标 App 生效 | 勾**那个 App** |
 
-三通道全开 = 勾「系统框架」+ 你想要的 App 们。只勾具体 App 不勾系统框架时，
-UVip(SP) 不会挂载（它走 zygote）；只勾系统框架时 Billing/ProActivator 不会注入
-任何具体 App（它们走 handleLoadPackage 按进程触发）。改完作用域需重启。
+> v14 起**不勾系统框架也正常**：UVip(SP) 走 handleLoadPackage 按进程触发，只操作你
+> 勾选的 App，绝不对未勾选应用 / 系统进程拦截 SharedPreferences。想解锁哪个 App，
+> 就勾哪个 App，改完作用域需重启。
 
 ### 联网型 App 怎么自测抗 hook（【D】NetLabHook）
 
@@ -161,9 +168,9 @@ UVip(SP) 不会挂载（它走 zygote）；只勾系统框架时 Billing/ProActi
 
 ```
 app/src/main/java/com/example/ubilling/
-├── Main.java                  # 入口：Billing 探测 + 白名单 ProActivator；initZygote 挂载 UVip
+├── Main.java                  # 入口：按作用域进程挂载 UVip(B) + Billing(A) + 白名单 ProActivator(C) + D/E/F
 ├── UniversalBillingHook.java  # 【A】通用 Billing hook（回灌已购 + 探测 SKU）
-├── UniversalVipSweeper.java   # 【B】自动 VIP 拦截 + 观测学习闭环（SP + 词表 + 类型自适应 + 规则回灌）
+├── UniversalVipSweeper.java   # 【B】自动 VIP 拦截 + 观测学习闭环（SP + 词表 + 类型自适应 + 规则回灌）——只作用域勾选 App
 ├── ProActivator.java          # 【C】选定 App(com.mobilecad.app) dex 精确构造器激活
 ├── NetLabHook.java            # 【D】联网抗hook自测: 响应篡改/pinning探测/WebView JS面
 └── MainActivity.java          # 占位 UI
