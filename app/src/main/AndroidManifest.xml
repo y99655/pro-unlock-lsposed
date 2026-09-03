@@ -2,7 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application
         android:allowBackup="true"
-        android:label="Universal Billing Hook"
+        android:label="kill vip"
         android:icon="@android:drawable/ic_menu_manage">
 
         <!-- LSPosed / Xposed 模块声明 -->
@@ -14,12 +14,12 @@
             android:value="53" />
         <meta-data
             android:name="xposeddescription"
-            android:value="通用: 对任意接入 Google Play Billing 的应用回灌已购记录(无包名白名单, 自动探测 SKU)" />
+            android:value="kill vip: 通用 VIP/PRO 解锁模块(Billing 回灌 + SP 全兼容 + 选定App精确激活) v1.1" />
 
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:label="Universal Billing Hook">
+            android:label="kill vip">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

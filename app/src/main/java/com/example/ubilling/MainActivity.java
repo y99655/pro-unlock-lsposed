@@ -12,13 +12,14 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         TextView tv = new TextView(this);
-        tv.setText("Universal Billing Hook (LSPosed)\n\n"
-                + "对任意接入 Google Play Billing SDK 的应用生效，无包名白名单。\n\n"
-                + "原理：反射恒定不混淆的官方 Billing SDK 类，\n"
-                + "拦截 queryPurchasesAsync 回灌假“已购”；\n"
-                + "自动探测 App 真正查询的 SKU，并叠加内置 SKU 表。\n\n"
-                + "使用：在 LSPosed 作用域勾选目标 App，重启即可。\n"
-                + "排查：LSPosed 日志过滤 [UBilling]。");
+        tv.setText("kill vip (LSPosed)  v1.1\n\n"
+                + "通用 VIP / PRO 解锁模块。\n\n"
+                + "三通道：\n"
+                + "A. Google Play Billing 回灌（任意 App）\n"
+                + "B. SharedPreferences 全兼容 + 观测学习（任意 App）\n"
+                + "C. 选定 App 精确激活（com.mobilecad.app）\n\n"
+                + "使用：LSPosed 作用域勾「系统框架」+ 目标 App，重启即可。\n"
+                + "排查：LSPosed 日志过滤 [UBilling] / [UVip] / [UPro]。");
         tv.setTextSize(15f);
         tv.setPadding(40, 40, 40, 40);
         setContentView(tv);
