@@ -4,6 +4,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -187,7 +188,6 @@ public class AutoVipProHook {
     private static volatile int candBool = 0;
     private static volatile int candTier = 0;
     private static volatile int hookedCnt = 0;
-    private static volatile List<String> cachedDexNames = null;
 
     // ==================================================================
     // 入口
@@ -204,13 +204,47 @@ public class AutoVipProHook {
         } catch (Throwable t) {
             XposedBridge.log(TAG + " dex枚举失败: " + t);
         }
-        // loadClass 钩：覆盖晚加载/分包类
+        // loadClass 钩：覆盖晚加载/分包类（对应用 loader 及整条非系统父链统一挂）
+        try {
+            hookLoadClassChain(cl);
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + " loadClass 钩失败: " + t);
+        }
+        scheduleSummary(pkg, 1500L, 1);
+        scheduleSummary(pkg, 4000L, 2);
+        scheduleSummary(pkg, 9000L, 3);
+    }
+
+    /** 对应用 loader 及其非系统父 loader 各挂一次 loadClass 钩（多 ClassLoader/分包/壳延迟加载）。 */
+    private static void hookLoadClassChain(ClassLoader root) {
+        Set<ClassLoader> seen = Collections.synchronizedSet(new HashSet<ClassLoader>());
+        hookLoadClassOn(root, seen);
+        ClassLoader p = root;
+        try {
+            while (p != null) {
+                p = p.getParent();
+                if (p == null) break;
+                String pn = p.toString();
+                // 跳过 boot/system 链（android.*/java.*/bootClassLoader），其类多为框架类
+                if (pn != null && (pn.contains("BootClassLoader") || pn.contains("java.net.URLClassLoader")
+                        || pn.contains("jdk.internal"))) continue;
+                hookLoadClassOn(p, seen);
+            }
+        } catch (Throwable ignore) {
+        }
+    }
+
+    private static void hookLoadClassOn(final ClassLoader lc, final Set<ClassLoader> seen) {
+        if (lc == null) return;
+        if (!seen.add(lc)) return;
         try {
             XposedHelpers.findAndHookMethod(ClassLoader.class, "loadClass", String.class, boolean.class,
                     new XC_MethodHook() {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
                             if (inScan.get()) return;
+                            // 只处理本次由“本 loader 链”加载的类
+                            if (param.thisObject != lc) return;
                             Object r = param.getResult();
                             if (!(r instanceof Class)) return;
                             Class<?> c = (Class<?>) r;
@@ -224,62 +258,70 @@ public class AutoVipProHook {
                     });
         } catch (Throwable ignore) {
         }
-        scheduleSummary(pkg, 1500L, 1);
-        scheduleSummary(pkg, 4000L, 2);
-        scheduleSummary(pkg, 9000L, 3);
     }
 
+    /** 多 ClassLoader 深度枚举：应用 loader + 其非系统父链的类名并集（覆盖分包/插件）。 */
     private static void enumerateDex(ClassLoader cl) {
+        Set<ClassLoader> loaders = new HashSet<ClassLoader>();
+        loaders.add(cl);
+        ClassLoader p = cl;
         try {
-            List<String> all = dexClassNames(cl);
-            for (String nm : all) {
-                if (isSystem(nm)) continue;
-                if (!scanned.add(nm)) continue;
-                try {
-                    Class<?> c = Class.forName(nm, false, cl);
-                    if (c == null || c.isInterface() || c.isAnnotation() || c.isEnum() || c.isPrimitive()) continue;
-                    inScan.set(Boolean.TRUE);
-                    try { scannedCls++; tryScan(c); }
-                    finally { inScan.set(Boolean.FALSE); }
-                } catch (Throwable ignore) {
-                }
+            while (p != null) {
+                p = p.getParent();
+                if (p == null) break;
+                String pn = p.toString();
+                if (pn != null && (pn.contains("BootClassLoader") || pn.contains("java.net.URLClassLoader")
+                        || pn.contains("jdk.internal"))) continue;
+                loaders.add(p);
             }
-            XposedBridge.log(TAG + " dex枚举完成: 读 " + all.size() + " 类, 扫 " + scannedCls + " 应用类");
-        } catch (Throwable t) {
-            XposedBridge.log(TAG + " dex枚举异常: " + t);
+        } catch (Throwable ignore) {
         }
+        Set<String> all = new java.util.LinkedHashSet<String>();
+        for (ClassLoader lc : loaders) {
+            try { all.addAll(dexClassNames(lc)); } catch (Throwable ignore) {}
+        }
+        XposedBridge.log(TAG + " dex枚举: " + loaders.size() + " 个 classloader, 共读 " + all.size() + " 类名");
+        for (String nm : all) {
+            if (isSystem(nm)) continue;
+            if (!scanned.add(nm)) continue;
+            try {
+                Class<?> c = Class.forName(nm, false, cl);
+                if (c == null || c.isInterface() || c.isAnnotation() || c.isEnum() || c.isPrimitive()) continue;
+                inScan.set(Boolean.TRUE);
+                try { scannedCls++; tryScan(c); }
+                finally { inScan.set(Boolean.FALSE); }
+            } catch (Throwable ignore) {
+            }
+        }
+        XposedBridge.log(TAG + " dex枚举完成: 扫 " + scannedCls + " 应用类");
     }
 
-    private static List<String> dexClassNames(ClassLoader cl) {
-        if (cachedDexNames != null) return cachedDexNames;
-        synchronized (AutoVipProHook.class) {
-            if (cachedDexNames != null) return cachedDexNames;
-            List<String> out = new ArrayList<>();
-            try {
-                Object pathList = XposedHelpers.getObjectField(cl, "pathList");
-                Object[] dexElements = (Object[]) XposedHelpers.getObjectField(pathList, "dexElements");
-                if (dexElements != null) {
-                    Class<?> dfc = Class.forName("dalvik.system.DexFile");
-                    Method gcl = dfc.getDeclaredMethod("getClassNameList", Object.class);
-                    gcl.setAccessible(true);
-                    for (Object el : dexElements) {
-                        try {
-                            Object df = XposedHelpers.getObjectField(el, "dexFile");
-                            if (df == null) continue;
-                            Object cookie = XposedHelpers.getObjectField(df, "mCookie");
-                            if (cookie == null) continue;
-                            String[] names = (String[]) gcl.invoke(df, cookie);
-                            if (names != null) for (String n : names) out.add(n);
-                        } catch (Throwable ignore) {
-                        }
+    private static List<String> dexClassNames(ClassLoader lc) {
+        if (lc == null) return new ArrayList<String>();
+        List<String> out = new ArrayList<String>();
+        try {
+            Object pathList = XposedHelpers.getObjectField(lc, "pathList");
+            Object[] dexElements = (Object[]) XposedHelpers.getObjectField(pathList, "dexElements");
+            if (dexElements != null) {
+                Class<?> dfc = Class.forName("dalvik.system.DexFile");
+                Method gcl = dfc.getDeclaredMethod("getClassNameList", Object.class);
+                gcl.setAccessible(true);
+                for (Object el : dexElements) {
+                    try {
+                        Object df = XposedHelpers.getObjectField(el, "dexFile");
+                        if (df == null) continue;
+                        Object cookie = XposedHelpers.getObjectField(df, "mCookie");
+                        if (cookie == null) continue;
+                        String[] names = (String[]) gcl.invoke(df, cookie);
+                        if (names != null) for (String n : names) out.add(n);
+                    } catch (Throwable ignore) {
                     }
                 }
-            } catch (Throwable t) {
-                XposedBridge.log(TAG + " dex类名枚举异常: " + t);
             }
-            cachedDexNames = out;
-            return out;
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + " dex类名枚举异常(" + lc + "): " + t);
         }
+        return out;
     }
 
     private static void scheduleSummary(final String pkg, long delay, final int round) {
@@ -316,6 +358,9 @@ public class AutoVipProHook {
         // v16: 会员信息类先扫一遍静态字段(按原值类别改写存储态)
         if (vipCls) {
             try { scanFields(c); } catch (Throwable ignore) {}
+            // v17: 会员类若以“单例对象持有会员状态(实例字段)”存，给它的静态取实例
+            //      方法(getInstance()/get()/instance()等)挂钩——拿到实例后改写实例字段。
+            try { hookSingletonProviders(c); } catch (Throwable ignore) {}
         }
         Method[] ms;
         try { ms = c.getDeclaredMethods(); } catch (Throwable t) { return; }
@@ -518,6 +563,108 @@ public class AutoVipProHook {
                             + " : " + t.getSimpleName()
                             + " (无实例不改写; 若有同名 getter 走方法钩子)");
                 }
+            } catch (Throwable ignore) {
+            }
+        }
+    }
+
+    // ==================================================================
+    // v17：单例对象实例字段注入（拿到实例后改写其会员实例字段）
+    // ==================================================================
+    private static final Set<String> singletonHooked = Collections.synchronizedSet(new HashSet<String>());
+
+    /** 静态取实例方法名单（小写精确名）。命中即 afterHook 拿实例并改写实例字段。 */
+    private static final String[] SINGLETON_GETTERS = {
+        "getinstance", "get", "instance", "getdefault", "getsingleton",
+        "singleton", "getutil", "getmanager", "init"
+    };
+
+    /** 对会员类的静态“取实例”方法挂钩：拿到实例 -> 按类别改写其会员实例字段。 */
+    private static void hookSingletonProviders(final Class<?> c) {
+        String cn = c.getName();
+        if (!singletonHooked.add(cn)) return;
+        for (Method m : c.getDeclaredMethods()) {
+            try {
+                int mod = m.getModifiers();
+                if (!Modifier.isStatic(mod) || !Modifier.isPublic(mod)) continue;
+                if (m.getParameterTypes().length != 0) continue;
+                Class<?> ret = m.getReturnType();
+                // 返回自身/超类/接口，或直接返回 c 的类型（常见返回该单例类或其接口）
+                if (!ret.isAssignableFrom(c) && ret != c) {
+                    // 返回 Object / 父接口也算，实例再按运行时类判断
+                    if (ret != Object.class) continue;
+                }
+                String mn = m.getName().toLowerCase(Locale.ROOT);
+                boolean isGetter = false;
+                for (String g : SINGLETON_GETTERS) {
+                    if (mn.equals(g)) { isGetter = true; break; }
+                }
+                if (!isGetter) continue;
+                XposedBridge.hookMethod(m, new XC_MethodHook() {
+                    @Override protected void afterHookedMethod(MethodHookParam param) {
+                        try {
+                            Object inst = param.getResult();
+                            if (inst == null) return;
+                            Class<?> rt = inst.getClass();
+                            if (rt.isInterface() || rt.isAnnotation() || rt.isEnum()) return;
+                            // 运行时类型也是会员类语境才改（或类名像会员）
+                            if (!isVipLikeClass(rt) && !isStrongMemberClass(rt)) return;
+                            scanInstanceFields(inst);
+                        } catch (Throwable ignore) {
+                        }
+                    }
+                });
+            } catch (Throwable ignore) {
+            }
+        }
+    }
+
+    /** 改写一个会员单例实例的会员实例字段（v16 scanFields 只处理 static，这里处理实例）。 */
+    private static final Set<String> instFieldTouched = Collections.synchronizedSet(new HashSet<String>());
+    private static void scanInstanceFields(Object inst) {
+        if (inst == null) return;
+        Class<?> c = inst.getClass();
+        Field[] fs;
+        try { fs = c.getDeclaredFields(); } catch (Throwable t) { return; }
+        String cn = c.getName();
+        boolean strongCls = isStrongMemberClass(c);
+        for (Field f : fs) {
+            try {
+                int mod = f.getModifiers();
+                if (Modifier.isStatic(mod)) continue;         // 静态由 scanFields 管
+                if (Modifier.isFinal(mod)) continue;
+                if (Modifier.isTransient(mod) || f.isSynthetic()) continue;
+                Class<?> t = f.getType();
+                boolean ok = t == boolean.class || t == Boolean.class
+                        || t == int.class || t == Integer.class
+                        || t == long.class || t == Long.class
+                        || t == String.class;
+                if (!ok) continue;
+                String fn = f.getName().toLowerCase(Locale.ROOT);
+                boolean hp = false;
+                for (String h : HARD_PASS) if (fn.contains(h)) { hp = true; break; }
+                if (hp) continue;
+                boolean nameMem = fieldMemName(fn);
+                if (!nameMem && !strongCls) continue;
+                boolean dateish = hasAnyCat(fn, CAT_DATE_HINT);
+                boolean tierish = hasAnyCat(fn, CAT_TIER_HINT);
+                boolean isBool = t == boolean.class || t == Boolean.class;
+                if (!isBool && !dateish && !tierish && !nameMem) continue;
+                f.setAccessible(true);
+                String sig = cn + "#" + f.getName();
+                Object orig;
+                try { orig = f.get(inst); } catch (Throwable e) { orig = null; }
+                String want = fieldCatValue(t, dateish, tierish, orig);
+                if (LOG_ONLY) {
+                    XposedBridge.log(TAG + " [观测] 单例实例字段 " + sig
+                            + " : " + t.getSimpleName() + " cur=" + String.valueOf(orig)
+                            + " -> 本可改写为 " + want + " (单例 " + System.identityHashCode(inst) + ")");
+                    continue;
+                }
+                if (!instFieldTouched.add(sig)) continue;
+                setFieldValue(f, inst, want);
+                XposedBridge.log(TAG + " 改写单例实例字段 " + sig + " : cur="
+                        + String.valueOf(orig) + " -> " + want);
             } catch (Throwable ignore) {
             }
         }
