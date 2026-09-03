@@ -246,20 +246,22 @@ public class UniversalVipSweeper {
 
     /**
      * 判定 key 是否带“到期/有效期”语义（决定是否走 2099 日期分支）。
-     * 先过“业务时间戳”护栏：DCloud 的 last_app_modify_date(防二次打包修改时间)、
-     * build/update/version 等业务时间字段即使被旧规则误标 date 也不注入日期，
-     * 只当普通键放行（真机反馈项）。
+     * 护栏顺序：
+     *   1) BIZ_TIMESTAMP(业务时间戳特征, 如 last_app_modify_date) -> 直接放行;
+     *   2) DATE_KEYWORDS 词命中 -> 是日期键;
+     *   3) 学习规则标 date 的 key -> 仅当 key 名也含日期提示词才算(防 adid 等
+     *      纯数字 ID 被旧版观测残留误标 date 后仍注入 2099 —— 真机反馈项)。
      */
     static boolean isDateKey(String rawKey) {
         if (rawKey == null) return false;
         String k = rawKey.toLowerCase();
         if (hasAny(k, BIZ_TIMESTAMP)) return false;
         if (hasAny(k, DATE_KEYWORDS)) return true;
-        // 学习规则里该 key 若被判定为 date 形态，也视为日期键
+        // 学习规则里该 key 若被判定为 date 形态，也视为日期键（需词佐证）
         String pkg = currentPkg();
         if (pkg != null) {
             String rule = learnedRule.get(pkg + "\u0001" + rawKey);
-            if (SHAPE_DATE.equals(rule)) return true;
+            if (SHAPE_DATE.equals(rule) && hasAny(k, DATE_HINT_WORDS)) return true;
         }
         return false;
     }
@@ -272,6 +274,13 @@ public class UniversalVipSweeper {
         "launch_time", "app_modify"
     };
 
+    /** 日期提示词：学习规则把某 key 标为 date 后，仍需这些词佐证才算日期键(防误伤)。 */
+    private static final String[] DATE_HINT_WORDS = {
+        "expire", "expiry", "expiration", "deadline", "valid_", "validity",
+        "end_date", "end_time", "ends_at", "expires", "due_", "until",
+        "date", "_time", "timestamp"
+    };
+
     private static boolean hasAny(String k, String[] arr) {
         for (String w : arr) if (k.contains(w)) return true;
         return false;
@@ -280,12 +289,21 @@ public class UniversalVipSweeper {
     /**
      * 命中前先查内存学习规则。只要 key 已经被 L1 磁盘扫描或此前命中确认过，就算它
      * 完全不含词表关键词，也判定为会员字段 -> 真正扩大匹配面。
+     * 例外：规则标 date 但 key 名无任何日期提示词的(如旧版残留把 adid 标 date)，
+     * 判定为误标 -> 放行(真机反馈: adid::getString 曾被注入 2099 / premium)。
      */
     private static boolean learnedHit(String rawKey) {
         String pkg = currentPkg();
         if (pkg == null || "?".equals(pkg)) return false;
         String v = learnedRule.get(pkg + "\u0001" + rawKey);
-        return v != null;
+        if (v == null) return false;
+        if (SHAPE_DATE.equals(v)) {
+            String k = rawKey.toLowerCase();
+            if (!hasAny(k, DATE_KEYWORDS) && !hasAny(k, DATE_HINT_WORDS)) {
+                return false;   // date 规则无词佐证 -> 误标, 放行
+            }
+        }
+        return true;
     }
 
     // ==================================================================
