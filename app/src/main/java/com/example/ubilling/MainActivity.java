@@ -6,9 +6,11 @@ import android.graphics.Typeface;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.view.View;
+import android.text.InputType;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.CompoundButton;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -45,8 +47,8 @@ public class MainActivity extends Activity {
                     "按类名/方法名/结构盲扫会员判定并注入（两级闸门，宽泛默认仅观测）。"},
             {"ch_db",         "【G】SQLite/DB 会员盲扫 (DB)",
                     "hook SQLite 读取出口，按列名语义改写会员列（默认仅观测）。"},
-            {"ch_adblock",    "【I】第三方广告 SDK 去广告 (AdBlock)",
-                    "v1.13 默认放行广告类防闪退(仅观测[UAd])；确需强屏蔽请改 HARD_BLOCK=true。"},
+            {"ch_adblock",    "【I】网络层去广告 (DNS拦截, AdClose思路)",
+                    "hook DNS 解析命中广告域名即拦截(掐断广告联网)，内置17K离线清单+可在线更新。下方可填在线黑名单URL。"},
     };
 
     private LinearLayout root;
@@ -104,6 +106,9 @@ public class MainActivity extends Activity {
             addChannelRow(ch[0], ch[1], ch[2]);
         }
 
+        // ---- 去广告在线黑名单 URL(v1.14) ----
+        addAdBlockUrlSection();
+
         TextView foot = new TextView(this);
         foot.setText("广告护栏：B/F/G 注入前会跳过\"广告服务控制上下文\"（防 VIP 解锁把广告激活），"
                 + "跳过分录 [UAdGuard]。去广告请勾【I】。");
@@ -138,6 +143,51 @@ public class MainActivity extends Activity {
             View v = root.getChildAt(i);
             if (v instanceof CheckBox) ((CheckBox) v).setChecked(val);
         }
+    }
+
+    /** 去广告在线黑名单 URL 输入 + 立即更新按钮（v1.14）。 */
+    private void addAdBlockUrlSection() {
+        TextView sec = new TextView(this);
+        sec.setText("【I】去广告在线黑名单 URL（可留空 = 只用内置 17K 离线清单）");
+        sec.setTextSize(14f);
+        sec.setTypeface(Typeface.DEFAULT_BOLD);
+        sec.setTextColor(Color.rgb(0, 0, 0));
+        sec.setPadding(0, dp(10), 0, dp(2));
+        root.addView(sec);
+
+        final EditText url = new EditText(this);
+        url.setSingleLine(true);
+        url.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        url.setHint("https://example.com/adblock_domains.txt");
+        String cur = prefs().getString(Settings.K_ADBLOCK_URL, "");
+        url.setText(cur);
+        url.setTextSize(13f);
+        root.addView(url, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(44)));
+
+        TextView hint = new TextView(this);
+        hint.setText("支持一行一域名 / hosts(0.0.0.0 x.com) / 带协议路径的 URL。填完点\"保存并更新\"，"
+                + "下次启动 hook 的目标 App 会拉取；也可手动重启目标 App 即时生效。");
+        hint.setTextSize(11f);
+        hint.setTextColor(Color.rgb(130, 130, 130));
+        root.addView(hint);
+
+        Button btn = new Button(this);
+        btn.setText("保存并立即更新");
+        btn.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                String v2 = url.getText() == null ? "" : url.getText().toString().trim();
+                prefs().edit().putString(Settings.K_ADBLOCK_URL, v2).commit();
+                // 触发一次在线拉取并并入（尽力而为；后台线程，UI 不卡）
+                try {
+                    BlockDomainStore.requestOnlineUpdate();
+                } catch (Throwable t) {
+                    // ignore
+                }
+            }
+        });
+        root.addView(btn, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(46)));
     }
 
     private android.content.SharedPreferences prefs() {

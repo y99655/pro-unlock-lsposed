@@ -52,6 +52,10 @@ public final class Settings {
     public static final String K_DB         = "ch_db";
     public static final String K_ADBLOCK    = "ch_adblock";
 
+    /** ===== 其它配置键（非通道开关）===== */
+    /** 去广告在线域名黑名单 URL（v1.14）。空=只用内置离线清单。 */
+    public static final String K_ADBLOCK_URL = "adblock_url";
+
     /** 只读偏好句柄（懒建一次，后续 reload）。 */
     private static volatile XSharedPreferences sPrefs = null;
     private static volatile long sLastReload = 0L;
@@ -84,6 +88,21 @@ public final class Settings {
         try {
             maybeReload(p);
             return p.getBoolean(key, def);
+        } catch (Throwable t) {
+            return def;
+        }
+    }
+
+    /**
+     * 读字符串配置（如在线黑名单 URL）。读不到/异常返回默认值。
+     */
+    public static String str(String key, String def) {
+        XSharedPreferences p = prefs();
+        if (p == null) return def;
+        try {
+            maybeReload(p);
+            String v = p.getString(key, def);
+            return v == null ? def : v;
         } catch (Throwable t) {
             return def;
         }

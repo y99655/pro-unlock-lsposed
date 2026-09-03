@@ -66,17 +66,20 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
  *   按【列名语义】把“布尔会员位列/等级列”读取改写为开通态；到期列因秒/毫秒二义
  *   只观测不强注入。默认 LOG_ONLY=true 只打 [UDB] 观测。仅自有/授权 App 自测。
  *
- * 【I】第三方广告 SDK 去广告通道（AdBlockHook）
- *   用户希望“判断出广告类、直接关闭广告”（第三方广告 SDK 型：AdMob/穿山甲/优量汇/
- *   百青藤等）。这类 SDK 类名固定、公开可枚举，故用 L1【包名前缀白名单】精确判断
- *   （不看类名猜，零误伤）。hook 应用 ClassLoader.loadClass，命中广告前缀做处理。
- *   默认 ADBLOCK_ON=true 启用；只拦明确列出的广告包名，不碰统计/推送/崩溃 SDK。
+ * 【I】网络层去广告通道（NetAdBlocker，v1.14 重做）
+ *   你提供 Close_3.9.3.apk=AdClose(著名开源去广告模块)做参考，按它的核心有效做法重写：
+ *   不再 hook 应用 ClassLoader.loadClass 去"屏蔽广告 SDK 类"(拦不住联网下发、硬引用会崩，
+ *   v1.13 已默认放行=等于没拦)。改为【网络层域名拦截】：在本进程内 hook
+ *   java.net.InetAddress 的 DNS 解析出口(getAllByName/getByName)，命中广告域名就让它
+ *   "解析失败"(getAllByName 返回空数组 / 其它抛 UnknownHostException)。广告 SDK 无论用
+ *   OkHttp/HttpURLConnection/Socket，请求前都要解析广告域名，这一刀掐断 → 广告无物料可渲染。
+ *   黑名单数据：内置 AdClose 17,475 条离线清单(assets/adblock_domains.txt) + 可配置 URL
+ *   在线更新(设置页填 adblock_url)。匹配安全(只拦命中域名，白域名/系统/业务正常解析不受影响)。
+ *   全逻辑 try/catch、只挂一次，面向加固目标也绝不闪退。UI 里 I/去广告 打勾仍作总开关。
  *
- *   ★v1.13 修复闪退：旧版“命中即抛 ClassNotFoundException 整类屏蔽”会让【硬引用】
- *   广告 SDK 且无 try/catch 保护的 App 闪退。故 v1.13 起默认 HARD_BLOCK=false：
- *   loadClass 命中广告前缀【放行 + [UAd] 观测】，类照常加载、绝不闪退；
- *   仅当确认目标 App 的广告 SDK 是懒加载/反射/带保护时才可置 HARD_BLOCK=true
- *   恢复整类屏蔽(最强去广告)。详见 AdBlockHook 头注释。
+ * ============================================================================
+ * v1.14 变更：删除 AdBlockHook.java(旧 loadClass 屏蔽广告类法)，新写 NetAdBlocker +
+ * BlockDomainStore。AdGuard.java 保留（它另用于防 VIP 注入把广告激活，独立互补）。
  *
  * ============================================================================
  * v1.12 新增：
@@ -190,14 +193,14 @@ public class Main implements IXposedHookLoadPackage {
             }
         }
 
-        // 【I】第三方广告 SDK 去广告通道（AdBlockHook）——按广告 SDK 包名前缀白名单处理
-        //     其类加载。v1.13 默认 HARD_BLOCK=false：命中放行 + [UAd] 观测(防硬引用闪退)；
-        //     确认目标广告 SDK 非硬引用时 AdBlockHook.HARD_BLOCK=true 才整类屏蔽(强去广告)。
-        //     ADBLOCK_ON=true 启用；仅自有/授权 App 自测。
+        // 【I】网络层去广告通道（NetAdBlocker，v1.14）——hook InetAddress DNS，命中
+        //     广告域名令其解析失败，掐断广告 SDK 联网要物料那一跳。黑名单=内置 AdClose
+        //     离线清单 + 可配置 URL 在线更新(见 BlockDomainStore / 设置页 adblock_url)。
+        //     全逻辑 try/catch、只挂一次，面向加固目标也绝不闪退。
         //     v1.12：MainActivity 不打勾(I/去广告)则整个去广告通道不挂载。
         if (onAdBlock) {
             try {
-                AdBlockHook.hook(cl, lpparam.packageName);
+                NetAdBlocker.hook(cl, lpparam.packageName);
             } catch (Throwable t) {
                 XposedBridge.log("[UAd] 挂载失败: " + t);
             }
