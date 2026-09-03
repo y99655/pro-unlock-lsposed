@@ -98,11 +98,14 @@ public class UniversalVipSweeper {
     // ==================================================================
     // ① 语义关键词表（转小写后子串匹配）。可自行增删调参。
     // ==================================================================
-    /** 付费/会员/已购：出现即视为“收费门禁”。 */
+    /** 付费/会员/已购：出现即视为“收费门禁”。
+     * 注：不带裸 activate/activated —— 真机反馈它过度命中 SDK 基建控制位
+     *    (forceActivate / sdk_activate / 网络探测激活), 而真会员键通常自带
+     *    vip/member/premium/license/unlock 等强词, 故由这些词承担判定。 */
     public static final String[] PAID_KEYWORDS = {
         "vip", "premium", "paid", "purchase", "purchased",
         "license", "licence", "entitle", "entitlement", "member",
-        "subscrib", "subscription", "gold", "activate", "activated",
+        "subscrib", "subscription", "gold",
         "isbuy", "has_buy", "bought", "owns", "owned", "paid_user",
         "unlock_pro"                                  // 显式组合，防 pro 误伤也覆盖
     };
@@ -302,7 +305,13 @@ public class UniversalVipSweeper {
         "cache_ana", "ana_switch", "expire_switch", "support_multi",
         "multi_process", "process_support",
         // 一般性 SDK token/刷新/心跳(非会员 token)
-        "sdk_token", "refresh_token_sdk", "heartbeat", "keepalive", "session_refresh"
+        "sdk_token", "refresh_token_sdk", "heartbeat", "keepalive", "session_refresh",
+        // 真机(v14)新见基建/控制位 —— 与会员付费态无关, 命中即放行:
+        //   forceActivate/AfterInstalled(强制激活标记), splashAd 开屏广告加载控制,
+        //   tnc_probe 网络探测(version/cmd), 及通用 probe 探测/feature 开关
+        "forceactivate", "afterinstall", "splashad", "adloadprocess", "loadprocess",
+        "tnc_probe", "probe_version", "probe_cmd", "probe_", "_probe",
+        "featuretoggle", "featureflag", "remoteswitch", "bizswitch", "conffetch"
     };
 
     /** 日期提示词：学习规则把某 key 标为 date 后，仍需这些词佐证才算日期键(防误伤)。 */
