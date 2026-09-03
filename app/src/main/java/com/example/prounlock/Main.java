@@ -23,13 +23,19 @@ public class Main implements IXposedHookLoadPackage, IXposedHookZygoteInit {
         XposedBridge.log("[ProUnlock] 命中目标包: " + lpparam.packageName);
         // 主解锁：强制应用内部 PRO 对象的激活布尔位（与版本/混淆无关，真正通杀）
         try {
-            ProUnlock.hook(lpparam.classLoader);
+            ProUnlock.hook();
         } catch (Throwable t) {
             XposedBridge.log("[ProUnlock] ProUnlock 挂钩失败: " + t);
         }
-        // 兜底：若目标为 Google Play 版（走 BillingClient 购买），尝试回灌已购记录
+        // 兜底：仅当目标为 Google Play 版（真正含 BillingClient）才尝试回灌已购记录，
+        // 否则直接跳过，避免无谓的 ClassNotFoundException 噪音
         try {
-            BillingHook.hook(lpparam.classLoader);
+            if (XposedHelpers.findClassIfExists("com.android.billingclient.api.BillingClient",
+                    lpparam.classLoader) != null) {
+                BillingHook.hook(lpparam.classLoader);
+            } else {
+                XposedBridge.log("[ProUnlock] 未检测到 BillingClient（国内版正常），跳过计费兜底");
+            }
         } catch (Throwable t) {
             XposedBridge.log("[ProUnlock] BillingHook 兜底失败(可忽略): " + t);
         }
