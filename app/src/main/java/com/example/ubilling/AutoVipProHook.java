@@ -1,5 +1,6 @@
 package com.example.ubilling;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
@@ -48,6 +49,38 @@ import de.robv.android.xposed.XposedHelpers;
  *       确认无误伤后再置 INJECT=true 重载模块做真实注入。
  *
  * 边界：同其它通道，仅用于你自己开发/拥有或明确获授权做安全评估的 App。
+ * ============================================================================
+ *
+ * ============================================================================
+ * v16 扩展【类名 + 原值类别】盲扫（用户需求：遍历搜索类名含 vip/pro 等的类，
+ * 然后按"成员原有值类别"hook）：
+ *
+ *   仅靠"方法名"扫会漏掉两类真会员态：
+ *     A) 会员状态存放在一个【类名带 vip/member/premium】的对象里(如 VipInfo/
+ *        MemberState/UserVip)，用普通字段(getter 名本身不含 vip/pro 词)保存：
+ *        isMember、level=3、expireTs、tier="normal"。方法名扫抓不到这些 getter
+ *        (core 无 vip/member 词)。
+ *     B) 直接以【字段】存、代码不经 getter 就读(如 static boolean isVip / 单例对象
+ *        的字段)。Xposed 无法拦截裸字段读，只能改写存储值。
+ *
+ *   v16 因此在方法名扫之外，新增一条【类名门禁】深扫：
+ *     - 类全名(小写)命中 CLS_INCLUDE( vip/svip/premium/entitle/platinum/
+ *       memberinfo/membership/membercenter/… ) 且未命中 CLS_EXCLUDE
+ *       (provider/protocol/processor/proxy/import/…) 的，视为"会员信息类"；
+ *     - 在该类内：
+ *        ① 放宽 getter 方法名门禁 —— 不必自带 vip/pro 词，只要类型符合且方法名
+ *           不是明显工具布尔，即可候选；注入值按【返回类型/名字形态】给类别值。
+ *        ② 扫其字段：static 非 final 的会员字段(boolean/int/long/String)——
+ *           反射读【原有值】并按类别改写存储值为开通态(布尔 true / 等级高值 /
+ *           long 到期 2099 / string 档位 premium)；实例字段无 getter 则仅观测
+ *           提示(需单例才能改写)。
+ *     - 类别判定(与 UVip 对 SP 的"类型自适应"一致)：
+ *         boolean/Boolean        -> true
+ *         int/Integer  名含 level/grade/tier/lv/type -> 高值(如 8)；否则 1
+ *         long/Long    名含 expire/end/valid/date/ts 或任意(会员上下文) -> 2099-01-01
+ *         String       名含 expire/valid/date -> "2099-01-01"；含 level/tier/type
+ *                       -> 原值已是 premium/vip/pro 则保留，否则 "premium"
+ *     - 默认 LOG_ONLY=true：只打 [UAuto] 观测(类·成员·类别·原值·拟注入)，不改值。
  * ============================================================================
  */
 public class AutoVipProHook {
@@ -103,13 +136,45 @@ public class AutoVipProHook {
         "support", "sports", "sport", "import", "export"
     };
 
-    /** 纯时间/工具布尔 getter 极易与“解锁位”混淆 —— 命中即放行，绝不注入。 */
+    /** 纯时间/工具布尔 getter 极易与"解锁位"混淆 —— 命中即放行，绝不注入。 */
     private static final String[] HARD_PASS = {
         "isempty", "isnull", "isnetwork", "isconnected", "isvisible", "isvalid",
         "isenabled", "isalive", "isready", "isdone", "isrunning", "isstarted",
         "isshown", "isdisplayed", "issupport", "ischecked", "isselected",
         "isfirst", "islast", "islogin", "islogined", "isinit", "isloaded"
     };
+
+    // ==================================================================
+    // v16 类名门禁：遍历"类名像会员"的类，按成员原值类别 hook
+    // ==================================================================
+    /** 类全名(小写)含任一下列子串 -> 视为会员信息/状态类，深扫字段与 getter。 */
+    private static final String[] CLS_INCLUDE = {
+        "vip", "svip", "premium", "entitle", "entitlement", "platinum",
+        "memberinfo", "membervo", "membership", "membercenter",
+        "membermanager", "memberstate", "membermodel", "vipext", "goldvip"
+    };
+    /** 类名命中即排除(纯 SDK/工具/非会员对象)。 */
+    private static final String[] CLS_EXCLUDE = {
+        "provider", "protocol", "processor", "improve", "promote", "proof",
+        "probe", "property", "proxy", "promise", "proguard", "import",
+        "android.", "java.", "kotlin.", "retrofit", "okhttp", "gson",
+        "memberlistadapter", "memberlistitem", "listmember", "teammember"
+    };
+
+    /** 到期/时间戳语义(类别=日期，注入 2099)。用较长/精确词避免误吞 send/trend/invalid。 */
+    private static final String[] CAT_DATE_HINT = {
+        "expire", "expiry", "expiration", "deadline", "duedate", "endtime",
+        "enddate", "endat", "expiresat", "validuntil", "validto", "validity",
+        "timestamp", "createtime", "endts", "overdate", "vipexpire", "memberexpire"
+    };
+    /** 等级/档位语义(类别=等级 int/档位 string)。 */
+    private static final String[] CAT_TIER_HINT = {
+        "level", "grade", "tier", "viptype", "viplevel", "usertype",
+        "memberlevel", "membertype", "rank"
+    };
+
+    private static final long FAR_MS = 4070908800000L;   // 2099-01-01 00:00:00 UTC
+    private static final String FAR_STR = "2099-01-01";
 
     // ==================================================================
     // 状态
@@ -247,18 +312,25 @@ public class AutoVipProHook {
 
     private static void tryScan(Class<?> c) {
         if (c == null || c.isInterface() || c.isAnnotation() || c.isEnum() || c.isPrimitive()) return;
+        final boolean vipCls = isVipLikeClass(c);
+        // v16: 会员信息类先扫一遍静态字段(按原值类别改写存储态)
+        if (vipCls) {
+            try { scanFields(c); } catch (Throwable ignore) {}
+        }
         Method[] ms;
         try { ms = c.getDeclaredMethods(); } catch (Throwable t) { return; }
         for (Method m : ms) {
             try {
-                judge(c, m);
+                judge(c, m, vipCls);
             } catch (Throwable ignore) {
             }
         }
     }
 
-    /** 对单个方法做三道门禁判断。 */
-    private static void judge(Class<?> c, Method m) {
+    /** 对单个方法做门禁判断。vipCls=方法所在类是否为"会员信息类"(类名门禁命中)。
+     *  vipCls 时放宽"方法名必须自带 vip/pro 词"——类名已提供会员语境，只要类型/
+     *  语义对、非工具布尔即可候选。 */
+    private static void judge(Class<?> c, Method m, boolean vipCls) {
         int mod = m.getModifiers();
         if (m.getParameterTypes().length != 0) return;        // 门禁2: 只要无参
         if (Modifier.isStatic(mod) && !Modifier.isPublic(mod)) return;
@@ -278,15 +350,21 @@ public class AutoVipProHook {
             String core = stripPrefix(low);
             // 误伤子串
             for (String fp : FALSE_POSITIVES) if (core.contains(fp)) return;
-            // 精确整词命中(极安全) 或 core 以强词结尾(如 vipmember/prouser)
-            boolean exact = inWords(core, EXACT_BOOL);
-            boolean suffixStrong = endsWithWord(core, BOOL_SUFFIX);
-            if (!exact && !suffixStrong) return;
+            // vipCls(类名已是会员类)时放宽：布尔 getter 只要 core 带任意会员/开通词
+            //   (vip/member/premium/pro/gold/active/enable/license/paid/unlock 等)即可候选；
+            // 否则须精确整词或强词结尾(极安全)。
+            boolean strong = inWords(core, EXACT_BOOL) || endsWithWord(core, BOOL_SUFFIX);
+            boolean inVipContext = vipCls && (core.contains("vip") || core.contains("member")
+                    || core.contains("premium") || core.contains("pro")
+                    || core.contains("gold") || core.contains("active")
+                    || core.contains("license") || core.contains("paid")
+                    || core.contains("unlock") || core.contains("enable"));
+            if (!strong && !inVipContext) return;
 
             candBool++;
             if (LOG_ONLY) {
                 XposedBridge.log(TAG + " [观测] boolean解锁位: " + c.getName() + "." + name
-                        + "() -> 本可注入true (core=" + core + ")");
+                        + "() -> 本可注入true (core=" + core + (vipCls ? ", 类名会员语境)" : ")"));
                 return;
             }
             hookTo(c, m, "true", "boolean解锁位");
@@ -298,20 +376,26 @@ public class AutoVipProHook {
                 || ret == Long.class || ret == String.class) {
             String core = stripPrefix(low);
             for (String fp : FALSE_POSITIVES) if (core.contains(fp)) return;
-            // 必须本身含 vip/member 词，避免把普通 level/type 全误当会员等级
             boolean hasVipWord = core.contains("vip") || core.contains("member")
-                    || core.contains("premium") || core.contains("pro");
-            if (!hasVipWord) return;
-            if (!endsWithWord(core, TIER_SUFFIX)) return;
+                    || core.contains("premium") || core.contains("pro")
+                    || core.contains("gold") || core.contains("svip");
+            // 档位/日期 getter：方法名(去前缀)需以 档位词 结尾，或命中日期词。
+            boolean tierish = endsWithWord(core, TIER_SUFFIX);
+            boolean dateish = hasAnyCat(core, CAT_DATE_HINT);
+            // 需满足：本身带会员词，或所在类为会员类(vipCls)——否则不把普通 level 当会员等级
+            if ((!vipCls && !hasVipWord) || (!tierish && !dateish)) return;
+            // 在会员语境里，日期/到期 getter 与档位 getter 都算候选
             candTier++;
             if (LOG_ONLY) {
-                XposedBridge.log(TAG + " [观测] 档位getter: " + c.getName() + "." + name
-                        + "() : " + ret.getSimpleName() + " -> 可注入顶级档位 (core=" + core + ")");
+                XposedBridge.log(TAG + " [观测] " + (dateish ? "到期getter" : "档位getter")
+                        + ": " + c.getName() + "." + name
+                        + "() : " + ret.getSimpleName()
+                        + (dateish ? " -> 本可注入2099" : " -> 本可注入顶级档位")
+                        + " (core=" + core + (vipCls ? ", 类名会员语境)" : ")"));
                 return;
             }
-            String want = (ret == String.class) ? "premium"
-                    : (ret == long.class || ret == Long.class) ? "4070908800000" : "6";
-            hookTo(c, m, want, "档位getter");
+            String want = catValue(ret, dateish, core);
+            hookTo(c, m, want, dateish ? "到期getter" : "档位getter");
             return;
         }
     }
@@ -342,6 +426,145 @@ public class AutoVipProHook {
         if (ret == long.class) return Long.valueOf(want);
         if (ret == Long.class) return Long.valueOf(want);
         return want;
+    }
+
+    // ==================================================================
+    // v16：类名门禁 + 原值类别判定 + 字段盲扫
+    // ==================================================================
+    /** 类全名(小写)是否像"会员信息/状态类"。 */
+    private static boolean isVipLikeClass(Class<?> c) {
+        String n = c.getName().toLowerCase(Locale.ROOT);
+        for (String x : CLS_EXCLUDE) if (n.contains(x)) return false;
+        for (String w : CLS_INCLUDE) if (n.contains(w)) return true;
+        return false;
+    }
+
+    /** 小写串是否命中任一类别提示词。 */
+    private static boolean hasAnyCat(String core, String[] arr) {
+        for (String w : arr) if (core.contains(w)) return true;
+        return false;
+    }
+
+    /**
+     * 按【返回类型 + 名字形态】给类别注入值（与 UVip 对 SP 的"类型自适应"一致）：
+     *   long/Long  (会员语境, 几乎必为到期戳)  -> 2099-01-01(毫秒)
+     *   String 且日期形态(expire/end/valid/date) -> "2099-01-01"
+     *   String 且档位形态(level/tier/type)     -> 见上方顶级档位
+     *   int/Integer                            -> 日期形态给剩余天数大数, 否则高等级
+     */
+    private static String catValue(Class<?> ret, boolean dateish, String core) {
+        if (ret == long.class || ret == Long.class) return String.valueOf(FAR_MS);
+        if (ret == String.class) return dateish ? FAR_STR : "premium";
+        // int 日期形态给"剩余天数≈恒未过期"; 否则给高等级档位
+        return dateish ? "99999" : "8";
+    }
+
+    /**
+     * 扫会员信息类的字段：按【原有值/声明类别】决定改写值。
+     *  - static 非 final 会员字段：反射读原值 -> 类别 -> 直接改写存储值为开通态
+     *    (代码若裸读该静态字段即可看到开通值；进程级只做一次)。
+     *  - 实例字段：无实例无法直接改写(Xposed 拦不了裸字段读)；仅观测提示，若其后有
+     *    同名 getter 会由 judge 走方法钩子覆盖。
+     */
+    private static final Set<String> fieldTouched = java.util.Collections.synchronizedSet(new HashSet<String>());
+    private static void scanFields(Class<?> c) {
+        Field[] fs;
+        try { fs = c.getDeclaredFields(); } catch (Throwable t) { return; }
+        String cn = c.getName();
+        boolean strongCls = isStrongMemberClass(c);
+        for (Field f : fs) {
+            try {
+                int mod = f.getModifiers();
+                if (Modifier.isStatic(mod) && Modifier.isFinal(mod)) continue; // final 常量不碰
+                if (Modifier.isTransient(mod) || f.isSynthetic()) continue;
+                Class<?> t = f.getType();
+                boolean ok = t == boolean.class || t == Boolean.class
+                        || t == int.class || t == Integer.class
+                        || t == long.class || t == Long.class
+                        || t == String.class;
+                if (!ok) continue;
+                String fn = f.getName().toLowerCase(Locale.ROOT);
+                boolean hp = false;
+                for (String h : HARD_PASS) if (fn.contains(h)) { hp = true; break; }
+                if (hp) continue;                              // 工具/时间布尔名 -> 跳过
+                boolean nameMem = fieldMemName(fn);
+                // 字段名无会员语义 且 类也非强会员类 -> 跳过(避免处理 id/name 等普通字段)
+                if (!nameMem && !strongCls) continue;
+                boolean dateish = hasAnyCat(fn, CAT_DATE_HINT);
+                boolean tierish = hasAnyCat(fn, CAT_TIER_HINT);
+                boolean isBool = t == boolean.class || t == Boolean.class;
+                // 布尔字段 / 日期字段 / 等级字段 / 字段名带会员词 四类才处理
+                if (!isBool && !dateish && !tierish && !nameMem) continue;
+                if (Modifier.isStatic(mod)) {
+                    // 静态字段：尝试读原值再改写(仅一次)
+                    f.setAccessible(true);
+                    String sig = cn + "#" + f.getName();
+                    Object orig;
+                    try { orig = f.get(null); } catch (Throwable e) { orig = null; }
+                    String want = fieldCatValue(t, dateish, tierish, orig);
+                    if (LOG_ONLY) {
+                        XposedBridge.log(TAG + " [观测] 静态字段 " + sig
+                                + " : " + t.getSimpleName() + " cur=" + String.valueOf(orig)
+                                + " -> 本可改写为 " + want);
+                        continue;
+                    }
+                    if (!fieldTouched.add(sig)) continue;
+                    setFieldValue(f, null, want);
+                    XposedBridge.log(TAG + " 改写静态字段 " + sig + " : cur="
+                            + String.valueOf(orig) + " -> " + want);
+                } else {
+                    // 实例字段(无实例)只观测
+                    XposedBridge.log(TAG + " [观测] 实例字段 " + cn + "#" + f.getName()
+                            + " : " + t.getSimpleName()
+                            + " (无实例不改写; 若有同名 getter 走方法钩子)");
+                }
+            } catch (Throwable ignore) {
+            }
+        }
+    }
+
+    /** 字段名(小写)是否带会员/开通语义。 */
+    private static boolean fieldMemName(String fn) {
+        return fn.contains("vip") || fn.contains("member") || fn.contains("premium")
+                || fn.contains("pro") || fn.contains("gold") || fn.contains("entitle")
+                || fn.contains("license") || fn.contains("unlock") || fn.contains("paid")
+                || fn.contains("svip") || fn.contains("platinum");
+    }
+
+    /** 是否为"强会员类"：类名含极强会员词(非仅 memberxxx 弱语境)。 */
+    private static boolean isStrongMemberClass(Class<?> c) {
+        String n = c.getName().toLowerCase(Locale.ROOT);
+        return n.contains("vip") || n.contains("svip") || n.contains("premium")
+                || n.contains("entitle") || n.contains("platinum") || n.contains("goldvip");
+    }
+
+    /** 字段原值 -> 目标值(按类别 + 原值形态)。 */
+    private static String fieldCatValue(Class<?> t, boolean dateish, boolean tierish, Object orig) {
+        if (t == boolean.class || t == Boolean.class) return "true";
+        if (t == long.class || t == Long.class) return String.valueOf(FAR_MS); // 到期戳
+        if (t == String.class) {
+            if (dateish) return FAR_STR;
+            if (orig != null) {
+                String o = orig.toString().toLowerCase(Locale.ROOT);
+                if (o.equals("premium") || o.equals("vip") || o.equals("pro")
+                        || o.equals("true") || o.equals("1")) return orig.toString();
+            }
+            return "premium";
+        }
+        // int：日期语义给"剩余天数≈恒未过期"，否则高等级
+        return dateish ? "99999" : "8";
+    }
+
+    private static void setFieldValue(Field f, Object inst, String want) {
+        try {
+            f.setAccessible(true);
+            Class<?> t = f.getType();
+            if (t == boolean.class || t == Boolean.class) f.setBoolean(inst, true);
+            else if (t == int.class || t == Integer.class) f.setInt(inst, Integer.parseInt(want));
+            else if (t == long.class || t == Long.class) f.setLong(inst, Long.parseLong(want));
+            else f.set(inst, want);
+        } catch (Throwable ignore) {
+        }
     }
 
     // ==================================================================

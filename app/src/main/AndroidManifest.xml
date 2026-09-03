@@ -14,7 +14,7 @@
             android:value="53" />
         <meta-data
             android:name="xposeddescription"
-            android:value="kill vip: 通用 VIP/PRO 解锁模块(Billing 回灌 + SP 全兼容 + 选定App精确激活) v1.3 仅作用域勾选App生效" />
+            android:value="kill vip: 通用 VIP/PRO 解锁模块(Billing 回灌 + SP 全兼容 + 选定App精确激活) v1.4 仅作用域勾选App生效" />
 
         <activity
             android:name=".MainActivity"

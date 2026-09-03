@@ -6,6 +6,7 @@
 - **【B】自动 VIP 拦截（SharedPreferences 方案）** —— 针对把会员/PRO/去广告状态存本地 `SharedPreferences` 的 App（**不要求走 Google 付费**，国内 App 也覆盖）。
 - **【C】选定 App 精确激活增强（ProActivator，白名单）** —— 针对把 PRO 位存【内存对象】、不经 SP 的 App（如指尖3D `com.mobilecad.app` 的 `EntitlementState`，构造器 `(Z,Enum,J,Z)` 首参=pro），做 dex 级精确构造器钩强制激活。仅白名单包名生效，不对任意 App 盲扫，避免误伤。
 - **【D】联网鉴权抗 HOOK 自测（NetLabHook，授权自测用）** —— 模拟针对服务端/联网鉴权型 App 的攻击面：OkHttp 响应篡改(T1)、SSL pinning 探测(T2)、WebView JS 注入/调用记录(T3)。默认 LOG_ONLY=只观测不改写；填规则关 LOG_ONLY 重建后测自己 App 能否被打穿。请勿用于破解他人服务。
+- **【F】自动盲扫解锁（AutoVipProHook，授权自测用）** —— 遍历目标 App 里"类名含 vip/pro/premium/member" 的类与"方法名像会员判定"的方法，**按成员原有值类别**决定注入值（布尔解锁位→true、等级 int→高值、到期 long/日期→2099、档位 string→premium），默认 LOG_ONLY=先观测打 [UAuto] 清单、确认无误伤后再开注入。v16 起支持**按类名盲扫其字段**（含静态会员字段直接改写存储值）。
 
 与 `lsposed_pro_unlock`（只针对 `com.mobilecad.app` 的专版）不同，本模块代码层面**无包名白名单**——
 但 **v14 起全部通道只作用于你在 LSPosed 作用域里勾选的 App**（借 LSPosed 的进程分发机制），
