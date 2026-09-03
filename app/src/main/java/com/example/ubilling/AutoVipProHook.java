@@ -43,13 +43,13 @@ import de.robv.android.xposed.XposedHelpers;
  *       且不命中 FALSE_POSITIVES(误伤子串) 才候选。不会盲抓 isEmpty/isVisible。
  *   门禁2【形态】：只 hook 无参、非 static(除少数)、返回 boolean/int/long/String 的
  *       getter/isXxx/hasXxx；带参、返回 void/Object/集合的一律跳过。
- *   门禁3【分级注入 + 默认只观测】：
+ *   门禁3【分级注入 + 全量注入(v1.9)】：
  *       - 把“绝对安全的 boolean 解锁位”(isPro/isVip/isPremium 精确名) 归 STRONG_BOOL，
- *         默认即可注入 true（这类名字几乎不可能误伤）；
- *       - 其余(名字含 vip/pro 前缀组合、返回 int 的等级/档位 getter 等) 在注入前需
- *         INJECT 开关打开，否则只打 [UAuto] 日志观测(LOG_ONLY)。
- *       首次对一个新 App 建议保持 LOG_ONLY=true，跑一次看 [UAuto] 命中清单，
- *       确认无误伤后再置 INJECT=true 重载模块做真实注入。
+ *         命中即注入 true（这类名字几乎不可能误伤）；
+ *       - 其余(名字含 vip/pro 前缀组合、返回 int 的等级/档位 getter 等) 亦随全量注入
+ *         改写为开通态（见下方 LOG_ONLY 总开关；v1.9 已置 false 为解锁模式）。
+ *       本通道早期设计为“默认 LOG_ONLY=true 先观测一轮确认无误伤”，v1.9 起为满足
+ *       开箱即解锁（通道 C 行为）已默认置 false 直接注入；仍可用 LOG_ONLY=true 切回观测。
  *
  * 边界：同其它通道，仅用于你自己开发/拥有或明确获授权做安全评估的 App。
  * ============================================================================
@@ -84,6 +84,8 @@ import de.robv.android.xposed.XposedHelpers;
  *         String       名含 expire/valid/date -> "2099-01-01"；含 level/tier/type
  *                       -> 原值已是 premium/vip/pro 则保留，否则 "premium"
  *     - 默认 LOG_ONLY=true：只打 [UAuto] 观测(类·成员·类别·原值·拟注入)，不改值。
+ *       (v16 引入时的保守默认；v1.9 起全局 LOG_ONLY 已置 false，此字段扫同样真改写，
+ *       详见类顶部 LOG_ONLY 总开关。)
  * ============================================================================
  *
  * ============================================================================
@@ -107,16 +109,35 @@ import de.robv.android.xposed.XposedHelpers;
  *     - 只认精确 (Z,Enum,J,Z) 签名，宁漏勿伤：普通 UI/业务/几何类构造器几乎不可能
  *       恰好是「boolean+Enum+long+boolean」布局，故该签名命中误伤风险极低、也不刷屏。
  * ============================================================================
+ *
+ * ============================================================================
+ * v1.9：LOG_ONLY 默认置 false —— 全量注入，恢复通道 C 的“开箱即解锁”
+ *
+ *   上一版(v1.8)把 C 并入 F 后默认 LOG_ONLY=true 只观测，导致结构盲扫虽能命中
+ *   指尖3D 的 q5/o0(q5/m)，却【不改值】、PRO 不生效，被用户指出“C 可以、F 没生效”。
+ *   根因并非探测能力丢失(C 的精确签名扫描已原样并入 F)，而是注入开关被 LOG_ONLY 压着。
+ *   v1.9 将 LOG_ONLY 置 false：对作用域内每个勾选 App，命中即真注入（构造首参 true +
+ *   boolean getter true + 解锁位/档位/会员字段改写），与通道 C 当初对指尖3D 的行为一致。
+ *   副作用与作用域提醒见类顶部 LOG_ONLY 总开关注释。
+ * ============================================================================
  */
 public class AutoVipProHook {
 
     private static final String TAG = "[UAuto]";
 
     /** ====== 注入总开关 ======
-     *  LOG_ONLY=true  -> 只扫类/方法并打 [UAuto] 观测日志，不改任何返回值（推荐先跑一轮）。
-     *  LOG_ONLY=false -> 真正强制改写命中方法的返回值（仅在你确认无误伤后开启）。
+     *  LOG_ONLY=true  -> 只扫类/方法并打 [UAuto] 观测日志，不改任何返回值（安全评估用）。
+     *  LOG_ONLY=false -> 真正强制改写命中方法的返回值 / 构造参数 / 字段（解锁模式）。
+     *
+     *  v1.9 默认置 false（全量注入，用户选定方向）：对【作用域内勾选】的每个 App，
+     *  凡命中结构盲扫 (Z,Enum,J,Z) 构造器 / boolean 解锁位 / 档位 getter / 会员类
+     *  字段的，一律真注入——恢复通道 C 当初对指尖3D 的“开箱即解锁”行为。
+     *
+     *  注意副作用：此开关同时放开 judge() 的方法名扫与 scanFields 的字段改写，
+     *  即除“几乎零误伤的结构盲扫”外，勾选进程里名称像会员的 getter/字段也会被改。
+     *  请在 LSPosed 作用域内【只勾选你自己开发/拥有/获授权评估的 App】。
      */
-    private static final boolean LOG_ONLY = true;
+    private static final boolean LOG_ONLY = false;
 
     /** 仅对选定的包名执行(调用方也会 gate，这里留双保险)；空/null 表示任意勾选进程。 */
     public static final String TARGET_PKG = null;
